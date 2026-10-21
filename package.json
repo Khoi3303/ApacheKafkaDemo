@@ -1,0 +1,25 @@
+{
+  "name": "apache-kafka-video-streaming-demo",
+  "version": "1.0.0",
+  "description": "Apache Kafka Event Streaming & Video Chunking Broadcast Demo - Stanford Lecture Case Study",
+  "main": "server/server.js",
+  "scripts": {
+    "start": "node server/server.js",
+    "dev": "node server/server.js"
+  },
+  "keywords": [
+    "kafka",
+    "event-streaming",
+    "video-chunking",
+    "pub-sub",
+    "broadcast"
+  ],
+  "author": "Kafka Demo Team",
+  "license": "MIT",
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.21.2",
+    "ws": "^8.18.0",
+    "kafkajs": "^2.2.4"
+  }
+}

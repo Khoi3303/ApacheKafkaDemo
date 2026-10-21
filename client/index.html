@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Apache Kafka Event Streaming & Broadcast Demo - Stanford Lecture</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body class="theme-light">
+  <div class="app-container">
+    <!-- Header -->
+    <header class="app-header">
+      <div class="brand-section">
+        <div class="kafka-logo-glow">⚡</div>
+        <div class="brand-text">
+          <h1>Apache Kafka: Video Streaming & Pub/Sub Broadcast</h1>
+          <p>Mô phỏng Băm nhỏ dữ liệu Video (Chunking) & Kiến trúc 1 Nguồn phát - Nhiều Nguồn thu (Fan-out Broadcast)</p>
+        </div>
+      </div>
+      <div class="header-badges">
+        <span class="badge badge-live">
+          <span class="badge-dot"></span>
+          <span id="ws-status-text">Đang kết nối WebSocket...</span>
+        </span>
+      </div>
+    </header>
+
+    <!-- Main Single Page Dashboard -->
+    <main class="main-content">
+      <!-- 1. Producer Control Bar (Nguồn Phát) -->
+      <section class="control-bar">
+        <div class="control-header-strip">
+          <div class="control-identity">
+            <span class="producer-tag">📡 NGUỒN PHÁT (VIDEO PRODUCER & CHUNKER)</span>
+            <span id="producer-status-badge" class="status-badge idle">⚪ Sẵn sàng phát</span>
+          </div>
+        </div>
+
+        <div class="control-actions-row">
+          <div class="control-group">
+            <button id="btn-start" class="btn btn-primary">
+              <span id="btn-start-icon">▶</span>
+              <span id="btn-start-text">Bắt Đầu Stream</span>
+            </button>
+            <button id="btn-pause" class="btn btn-secondary" disabled>
+              <span id="btn-pause-icon">⏸</span>
+              <span id="btn-pause-text">Tạm Dừng</span>
+            </button>
+            <button id="btn-stop" class="btn btn-danger">
+              <span>⏹</span> Dừng Hẳn
+            </button>
+            <button id="btn-reset" class="btn btn-outline">
+              <span>🔄</span> Reset Toàn Bộ
+            </button>
+          </div>
+
+          <div class="control-group">
+            <div class="setting-selector">
+              <label for="select-chunk-size">Kích thước Chunk:</label>
+              <select id="select-chunk-size">
+                <option value="32768">32 KB (Siêu mịn)</option>
+                <option value="65536" selected>64 KB (Khuyến nghị)</option>
+                <option value="131072">128 KB (Cân bằng)</option>
+                <option value="262144">256 KB (Tốc độ cao)</option>
+              </select>
+            </div>
+
+            <div class="setting-selector">
+              <label for="select-speed">Tốc độ Stream:</label>
+              <select id="select-speed">
+                <option value="1000">1 chunk/s (Chậm để quan sát)</option>
+                <option value="250" selected>4 chunks/s (Mặc định)</option>
+                <option value="100">10 chunks/s (Nhanh)</option>
+                <option value="40">25 chunks/s (Tốc độ tối đa)</option>
+              </select>
+            </div>
+
+            <button id="btn-open-upload" class="btn btn-secondary">
+              <span>📁</span> Đổi Video Khác...
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <!-- 2. Key Metrics Strip -->
+      <section class="metrics-strip">
+        <div class="metric-card">
+          <div class="metric-icon kafka">⚡</div>
+          <div class="metric-info">
+            <h4>Total Messages (Gói Tin)</h4>
+            <div class="metric-value" id="val-total-msgs">0</div>
+            <div class="metric-sub" id="val-chunks-progress">0 / 0 chunks (0%)</div>
+          </div>
+        </div>
+
+        <div class="metric-card">
+          <div class="metric-icon cyan">📊</div>
+          <div class="metric-info">
+            <h4>Throughput (Băng Thông)</h4>
+            <div class="metric-value" id="val-throughput">0.0 KB/s</div>
+            <div class="metric-sub" id="val-msgs-sec">0 msgs/sec</div>
+          </div>
+        </div>
+
+        <div class="metric-card">
+          <div class="metric-icon purple">👥</div>
+          <div class="metric-info">
+            <h4>Consumer Groups (Nguồn Thu)</h4>
+            <div class="metric-value">3 Active</div>
+            <div class="metric-sub">1 Nguồn phát ➔ 3 Nguồn thu</div>
+          </div>
+        </div>
+
+        <div class="metric-card">
+          <div class="metric-icon emerald">⏱️</div>
+          <div class="metric-info">
+            <h4>Total Consumer Lag (Độ Chậm)</h4>
+            <div class="metric-value" id="val-total-lag">0</div>
+            <div class="metric-sub" id="val-lag-status">Đồng bộ hoàn hảo</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 3. Animated Topology Pipeline Flow -->
+      <section class="topology-section">
+        <div class="section-header">
+          <div>
+            <div class="section-title">
+              <span>🚀</span> Pipeline Dữ Liệu Thời Gian Thực: 1 Nguồn Phát ➔ Kafka Broker ➔ 3 Nguồn Thu
+            </div>
+            <div class="section-subtitle">
+              Video được băm nhỏ thành các sự kiện 64KB, đẩy vào Kafka Broker và được <strong>Pub/Sub Broadcast (Fan-out)</strong> đồng thời tới 3 nguồn thu độc lập
+            </div>
+          </div>
+        </div>
+        <canvas id="topology-canvas"></canvas>
+      </section>
+
+      <!-- 4. Three Independent Consumer Groups (Fan-Out Broadcast Showcase) -->
+      <section class="consumers-grid">
+        <!-- Consumer 1: Live Video Player -->
+        <article class="consumer-box video-group">
+          <div class="consumer-box-header">
+            <div>
+              <span class="consumer-badge-pill">NGUỒN THU 1 (CONSUMER GROUP: cg-video-streamer)</span>
+              <h3 class="consumer-title">🎬 Live Video Streamer</h3>
+              <div class="consumer-live-status" id="c1-live-status">
+                <span class="status-dot"></span> <span id="c1-status-text">Sẵn sàng nhận dữ liệu</span>
+              </div>
+            </div>
+            <button class="consumer-action-btn" id="btn-toggle-c1" data-group="cg-video-streamer" title="Ngắt kết nối để xem Consumer Lag tăng">
+              🔴 Thử ngắt nhận (Test Lag)
+            </button>
+          </div>
+
+          <p class="consumer-desc">
+            Nhận từng chunk nhị phân qua Kafka, tái ghép mảng bytes liên tục để phát video trực tiếp trên trình duyệt.
+          </p>
+
+          <div class="video-preview-wrapper">
+            <video id="lecture-video-player" controls autoplay muted playsinline></video>
+            <div class="video-status-overlay">
+              <span id="player-chunk-status">Chờ chunks từ Kafka...</span>
+              <span id="player-buffer-size">Buffer: 0 KB</span>
+            </div>
+          </div>
+
+          <div class="buffer-progress-bar">
+            <div class="buffer-progress-fill" id="player-progress-fill"></div>
+          </div>
+
+          <div class="consumer-stats-footer">
+            <span>Đã nhận: <strong id="c1-processed">0</strong> chunks</span>
+            <span class="lag-indicator zero" id="c1-lag">Lag: 0</span>
+          </div>
+        </article>
+
+        <!-- Consumer 2: Kafka Message Inspector -->
+        <article class="consumer-box ai-group">
+          <div class="consumer-box-header">
+            <div>
+              <span class="consumer-badge-pill">NGUỒN THU 2 (CONSUMER GROUP: cg-msg-inspector)</span>
+              <h3 class="consumer-title">🔬 Kafka Message Inspector</h3>
+              <div class="consumer-live-status" id="c2-live-status">
+                <span class="status-dot"></span> <span id="c2-status-text">Sẵn sàng nhận dữ liệu</span>
+              </div>
+            </div>
+            <button class="consumer-action-btn" id="btn-toggle-c2" title="Ngắt để xem Lag tăng">
+              🔴 Ngắt Message Inspector (Test Lag)
+            </button>
+          </div>
+
+          <p class="consumer-desc">
+            Hiển thị <strong>dữ liệu kỹ thuật thực</strong> của từng Kafka Message: Partition Key → Hash → Partition được chọn, byte range [start → end], 12 bytes HEX đầu của chunk, MD5 checksum.
+          </p>
+
+          <div class="inspector-terminal" id="msg-inspector-terminal">
+            <div class="inspector-entry" style="opacity:0.5">
+              <div class="inspector-header">
+                <span class="inspector-chunk-id">CHUNK #? / ?</span>
+                <span class="inspector-partition" style="background:#0ea5e920;color:#0ea5e9;border:1px solid #0ea5e940">→ Partition ?</span>
+                <span class="inspector-offset">Offset: <strong>#?</strong></span>
+              </div>
+              <div class="inspector-routing">
+                <span class="inspector-label">KEY</span><code class="inspector-code">chunk-0</code>
+                <span class="inspector-arrow">→</span>
+                <span class="inspector-label">HASH</span><code class="inspector-code">0x????????</code>
+                <span class="inspector-arrow">→</span>
+                <span class="inspector-label">MOD 3</span><code class="inspector-code">? % 3 = ?</code>
+              </div>
+              <div class="inspector-bytes">
+                <span class="inspector-label">BYTES</span><code class="inspector-code">[0 → 65,536]</code>
+                <span class="inspector-label" style="margin-left:8px">HEX</span><code class="inspector-hex-data">-- -- -- -- -- -- -- -- -- -- -- --</code>
+              </div>
+            </div>
+          </div>
+
+          <div class="consumer-stats-footer">
+            <span>Đã inspect: <strong id="c2-processed">0</strong> messages</span>
+            <span class="lag-indicator zero" id="c2-lag">Lag: 0</span>
+          </div>
+        </article>
+
+        <!-- Consumer 3: Chunk Reassembly Tracker -->
+        <article class="consumer-box db-group">
+          <div class="consumer-box-header">
+            <div>
+              <span class="consumer-badge-pill">NGUỒN THU 3 (CONSUMER GROUP: cg-reassembly-tracker)</span>
+              <h3 class="consumer-title">🧩 Chunk Reassembly Tracker</h3>
+              <div class="consumer-live-status" id="c3-live-status">
+                <span class="status-dot"></span> <span id="c3-status-text">Sẵn sàng nhận dữ liệu</span>
+              </div>
+            </div>
+            <button class="consumer-action-btn" id="btn-toggle-c3" title="Ngắt để xem lag">
+              🔴 Ngắt Reassembly Tracker (Test Lag)
+            </button>
+          </div>
+
+          <p class="consumer-desc">
+            Theo dõi <strong>quá trình tái ghép chunk</strong> từ nhiều Partition khác nhau: chunk nào đã nhận (■), phân bổ chunk theo Partition (P0/P1/P2), bytes tích lũy theo thời gian thực.
+          </p>
+
+          <!-- Chunk Map Visual -->
+          <div class="reassembly-map-panel" id="reassembly-map">
+            <div style="text-align:center;color:var(--text-muted);padding:20px;font-size:13px">
+              Chờ stream bắt đầu để hiển thị bản đồ ghép chunk...
+            </div>
+          </div>
+
+          <!-- Reassembly log -->
+          <div class="reassembly-log" id="reassembly-terminal"></div>
+
+          <div class="consumer-stats-footer">
+            <span>Đã ghép: <strong id="c3-processed">0</strong> chunks</span>
+            <span class="lag-indicator zero" id="c3-lag">Lag: 0</span>
+          </div>
+        </article>
+      </section>
+
+      <!-- 5. Partition Logs & Offsets -->
+      <section class="partitions-panel">
+        <div class="section-header">
+          <div>
+            <div class="section-title">
+              <span>🗂️</span> Nhật Ký Phân Vùng (Kafka Partition Logs & Sequential Offsets)
+            </div>
+            <div class="section-subtitle">
+              Mỗi tin nhắn trong Kafka được lưu trữ vĩnh viễn trên đĩa cứng và đánh số <strong>Offset tuần tự tăng dần (0, 1, 2...)</strong>. Mỗi Consumer Group quản lý con trỏ Offset độc lập.
+            </div>
+          </div>
+        </div>
+
+        <div class="partition-track" id="partition-track-container">
+          <!-- Dynamically populated by app.js -->
+        </div>
+      </section>
+    </main>
+
+    <!-- Modal for Uploading Custom Video -->
+    <div class="modal-overlay" id="upload-modal">
+      <div class="modal-box">
+        <div class="modal-header">
+          <h3>📁 Chọn Video Tùy Chọn Từ Máy Tính</h3>
+          <button class="close-modal-btn" id="btn-close-modal">&times;</button>
+        </div>
+        <div class="dropzone-area" id="dropzone">
+          <p style="font-size: 32px; margin-bottom: 12px;">📤</p>
+          <p><strong>Kéo thả file video vào đây</strong></p>
+          <p style="font-size: 12px; color: var(--text-muted); margin-top: 6px;">Hoặc bấm vào để chọn file MP4 / WebM từ máy</p>
+          <input type="file" id="file-input" accept="video/mp4,video/webm" style="display: none;">
+        </div>
+        <div style="margin-top: 18px; text-align: right;">
+          <button class="btn btn-secondary" id="btn-cancel-modal">Hủy</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Toast Notifications Container -->
+    <div class="toast-container" id="toast-container"></div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
