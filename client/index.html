@@ -143,7 +143,7 @@
           <div class="consumer-box-header">
             <div>
               <span class="consumer-badge-pill">NGUỒN THU 1 (CONSUMER GROUP: cg-video-streamer)</span>
-              <h3 class="consumer-title">🎬 Live Video Streamer</h3>
+              <h3 class="consumer-title">🎬 Video Reassembly Player</h3>
               <div class="consumer-live-status" id="c1-live-status">
                 <span class="status-dot"></span> <span id="c1-status-text">Sẵn sàng nhận dữ liệu</span>
               </div>
@@ -154,7 +154,7 @@
           </div>
 
           <p class="consumer-desc">
-            Nhận từng chunk nhị phân qua Kafka, tái ghép mảng bytes liên tục để phát video trực tiếp trên trình duyệt.
+            Nhận từng Kafka message (binary chunk). Sau khi đủ tất cả chunks, tái ghép thành file MP4 và phát video.
           </p>
 
           <div class="video-preview-wrapper">

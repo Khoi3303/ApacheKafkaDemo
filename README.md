@@ -40,7 +40,7 @@ Video Player  Inspector    Reassembly Tracker
 
 ---
 
-## 🚀 Chạy Demo (3 bước)
+## 🚀 Chạy Demo
 
 ### Yêu cầu
 - Docker Desktop đang chạy

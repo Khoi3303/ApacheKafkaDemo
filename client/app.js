@@ -326,15 +326,15 @@ document.addEventListener('DOMContentLoaded', () => {
     const progress = Math.round((state.currentChunkIndex / data.totalChunks) * 100);
     const isCompleted = state.currentChunkIndex >= data.totalChunks;
 
-    if (!isCompleted) {
-      // While streaming: Accumulate buffer smoothly without flickering video element
+      if (!isCompleted) {
+      // While streaming: Show buffering progress — do NOT touch video element
       if (overlay) overlay.style.opacity = '1';
-      playerChunkStatus.textContent = `⚡ Đang ghép Chunk #${data.chunkIndex + 1}/${data.totalChunks} [Offset: #${data.offset}]`;
+      playerChunkStatus.textContent = `⏳ Đang đệm chunk #${data.chunkIndex + 1}/${data.totalChunks} từ Kafka [Offset: #${data.offset}]`;
       playerBufferSize.textContent = `Buffer: ${(totalBytes / 1024).toFixed(1)} KB (${progress}%)`;
       playerProgressFill.style.width = `${progress}%`;
     } else {
-      // All chunks received: Assemble the full MP4 file ONCE and play smoothly at 60fps!
-      playerChunkStatus.textContent = `✅ Đã ghép ${data.totalChunks}/${data.totalChunks} chunks từ Kafka`;
+      // All chunks received from Kafka: reassemble the full MP4 blob and play
+      playerChunkStatus.textContent = `✅ Tái ghép đủ ${data.totalChunks}/${data.totalChunks} chunks từ Kafka — Đang phát`;
       playerBufferSize.textContent = `Buffer: ${(totalBytes / 1024).toFixed(1)} KB (100%)`;
       playerProgressFill.style.width = '100%';
 
