@@ -1,100 +1,169 @@
-# 🎤 KỊCH BẢN THUYẾT TRÌNH BẢO VỆ ĐỀ TÀI APACHE KAFKA (20%)
-> **Dành cho nhóm sinh viên:** Bám sát tuyệt đối hướng dẫn chấm điểm của Thầy (WHAT, WHY, HOW, WHEN) và trả lời xuất sắc câu hỏi hóc búa của Thầy.
+# 🎤 KỊCH BẢN THUYẾT TRÌNH BẢO VỆ ĐỀ TÀI APACHE KAFKA
+> **Tài liệu chuẩn bị bảo vệ:** Bám sát tuyệt đối kiến trúc code thực tế, giải thích chính xác cơ chế Kafka (Topic, Partition, Offset, Consumer Group, Lag, Fan-out) và bộ câu hỏi vấn đáp phản biện.
+
+---
+
+## 🌟 3 CÂU "NẰM LÒNG" PHẢI NÓI CHUẨN KHI BẢO VỆ
+
+1. **Về vai trò của Producer & Kafka:**
+   > *"Producer splits the video into chunks. Kafka does not split the video; Kafka stores, partitions, and distributes the chunk messages."*  
+   > *(Producer của ứng dụng chủ động băm nhỏ video thành các chunk. Bản thân Kafka không tự băm video; Kafka đóng vai trò lưu trữ, phân vùng và phân phối các thông điệp chunk đó).*
+
+2. **Về cơ chế Fan-out & Consumer Group:**
+   > *"Each consumer group has its own offset, so multiple services can independently consume the same event stream."*  
+   > *(Mỗi Consumer Group sở hữu con trỏ committed offset hoàn toàn độc lập, nhờ đó nhiều dịch vụ khác nhau có thể cùng đọc và xử lý một luồng dữ liệu mà không gây cản trở hay phụ thuộc lẫn nhau).*
+
+3. **Về thứ tự dữ liệu (Ordering) và tái ghép (Reassembly):**
+   > *"Kafka guarantees ordering within a partition, while the chunk index allows the application to reconstruct the original video order across partitions."*  
+   > *(Kafka đảm bảo thứ tự tuần tự tuyệt đối bên trong từng partition, còn trường chunk-index trong metadata giúp tầng ứng dụng tái ghép lại chính xác video gốc bất kể các chunk được phân tán vào nhiều partition).*
 
 ---
 
 ## ⏱️ PHÂN BỔ THỜI GIAN THUYẾT TRÌNH (TỔNG: 10 - 15 PHÚT)
-- **Phần 1: Khía cạnh lý thuyết (3 - 4 phút):** WHAT, WHY, HOW, WHEN & Vị trí Kafka trong kiến trúc.
-- **Phần 2: Demo thực hành trực quan (5 - 7 phút):** Thao tác trên Web Dashboard, chứng minh Băm nhỏ dữ liệu và 1 Nguồn phát - Nhiều Nguồn thu.
-- **Phần 3: Vấn đáp & Trả lời câu hỏi của Thầy (3 - 5 phút):** Bộ câu hỏi - câu trả lời "tủ".
+- **Phần 1: Khía cạnh lý thuyết & Kiến trúc (3 - 4 phút):** Bản chất Kafka, lý do băm nhỏ dữ liệu, vị trí của Kafka trong hệ thống.
+- **Phần 2: Demo thực hành trực quan & Bằng chứng CLI (5 - 7 phút):** Thao tác trên Web Dashboard, quan sát Fan-out 3 Consumer Groups, mô phỏng Consumer Lag & Catch-up Replay, đối chiếu Kafka UI và CLI.
+- **Phần 3: Vấn đáp phản biện (3 - 5 phút):** Bộ câu hỏi chuyên sâu của Thầy về ordering, scale 5GB, partition key, consumer group topology.
 
 ---
 
-## 📑 PHẦN 1: NỘI DUNG LÝ THUYẾT (SLIDES / NÓI)
+## 📑 PHẦN 1: NỘI DUNG LÝ THUYẾT & KIẾN TRÚC
 
-### 1. WHAT (Đề tài trình bày nội dung gì, công cụ gì?)
-> *"Kính thưa Thầy và các bạn, nhóm chúng em xin trình bày về **Apache Kafka** - Nền tảng truyền phát sự kiện phân tán (Distributed Event Streaming Platform) mạnh mẽ nhất hiện nay.*  
-> *Ba đặc trưng kỹ thuật cốt lõi của Kafka:*
-> 1. *Khả năng xuất bản và đăng ký nhận thông điệp (Publish - Subscribe) với thông lượng hàng triệu message/giây.*
-> 2. *Khả năng lưu trữ phân tán bền vững trên đĩa cứng dưới dạng **Append-only Commit Log** có khả năng nhân bản và chịu lỗi.*
-> 3. *Khả năng xử lý dòng dữ liệu theo thời gian thực (Real-time Stream Processing)."*
-
----
-
-### 2. WHY (Vì sao cần khai thác? Vì sao phải băm nhỏ dữ liệu?)
-> *"Thầy đã đặt ra câu hỏi rất quan trọng: **Tại sao khi truyền video 1GB ta không truyền cả file qua đường truyền mà phải băm nhỏ nó ra?** Nhóm em xin làm rõ 4 lý do sống còn:*
-> 1. ***Độ trễ thời gian thực (Zero Latency Streaming):** Nếu truyền nguyên file 1GB qua HTTP hoặc lưu vào SQL BLOB, người xem phải đợi tải xong 100% (hàng chục phút) mới xem được. Khi băm thành các chunk 64KB, người dùng có thể xem ngay giây đầu tiên khi Chunk 0 vừa đến trong khi Server vẫn đang tiếp tục truyền Chunk 100.*
-> 2. ***Bảo vệ bộ nhớ (Chống OOM Crash):** Kafka được thiết kế tối ưu cho message từ vài KB đến 1MB. Truyền 1GB sẽ làm nổ tung bộ nhớ JVM Heap của cả Broker và Consumer.*
-> 3. ***Độ chịu lỗi (Fault-Tolerance):** Nếu đường truyền bị ngắt khi tải 99% của file 1GB, toàn bộ 1GB phải tải lại từ đầu. Với Kafka, hệ thống chỉ cần retry lại đúng chunk 64KB bị lỗi.*
-> 4. ***Xử lý song song đa nhiệm (Parallel Pipelines):** Mô hình AI có thể vừa dịch phụ đề cho Chunk 1 trong khi Producer đang truyền Chunk 5."*
+### 1. Bản chất của Apache Kafka
+- **Apache Kafka** là nền tảng truyền phát sự kiện phân tán (Distributed Event Streaming Platform), vận hành theo mô hình **Distributed Append-only Commit Log**.
+- **Điểm khác biệt cốt lõi với Message Queue truyền thống (như RabbitMQ):**
+  - Message Queue truyền thống: Message sau khi consumer đọc xong sẽ bị xóa khỏi queue.
+  - Apache Kafka: Message được lưu trữ bền vững trên đĩa cứng theo thời gian (Retention Period). Các Consumer Groups khác nhau tự quản lý con trỏ **Offset** của riêng mình, có thể đọc độc lập và phát lại (Replay) dữ liệu khi cần.
 
 ---
 
-### 3. VỊ TRÍ KAFKA TRONG SOURCE CODE: "Giữa Frontend - Backend hay giữa Backend - SQL?"
-> *(Đây là câu hỏi trọng tâm của Thầy, nhóm cần khẳng định tự tin theo 3 luận điểm sau):*
->
-> 🔹 **1. Có nên đặt Kafka giữa Frontend và Backend không?**  
-> ➔ **TRẢ LỜI: KHÔNG NÊN trong môi trường Production.**  
-> - *Lý do:* Trình duyệt web chạy trên môi trường không an toàn. Nếu mở cổng 9092 của Kafka ra public Internet, kẻ xấu có thể tấn công DDoS, spam partition làm sập cụm broker. Ngoài ra, trình duyệt chỉ hỗ trợ HTTP/WebSocket, không hỗ trợ TCP socket thô của Kafka.  
-> - *Cách làm đúng chuẩn:* Frontend gửi dữ liệu qua HTTP REST hoặc WebSocket tới **Backend API Gateway / Ingestion Service**, sau đó Backend dùng **Kafka Producer API** đẩy vào Kafka.
->
-> 🔹 **2. Có nên đặt Kafka giữa Backend và SQL không?**  
-> ➔ **TRẢ LỜI: RẤT NÊN VÀ RẤT PHỔ BIẾN!**  
-> - *Lý do:* Đây là mô hình **Async Write Buffering (Chống sập Database)**. Khi hàng trăm nghìn video chunk hoặc lượt click dồn về mỗi giây, nếu ghi thẳng vào SQL Database, database sẽ bị nghẽn connection và treo cứng. Kafka đứng giữa làm vùng đệm chịu tải. Consumer sẽ đọc dữ liệu từ Kafka và ghi vào SQL theo từng đợt (**Batch Insert**) với tốc độ an toàn.  
-> - *Mô hình ngược lại (CDC):* Sử dụng Debezium để bắt thay đổi trong log của SQL rồi đẩy vào Kafka để đồng bộ sang các hệ thống khác.
->
-> 🔹 **3. Kết luận vị trí tối ưu nhất của Kafka:**  
-> ➔ **Kafka là "Xương sống sự kiện" (Distributed Event Backbone) nằm giữa các Microservices độc lập ở tầng Backend.**
+### 2. Vì sao phải băm nhỏ dữ liệu video lớn thành các Chunk 64KB?
+Nhóm làm rõ 4 lý do kỹ thuật:
+1. **Bảo vệ bộ nhớ Broker & Consumer (Chống OOM Crash):** Kafka được thiết kế và tối ưu cho các message từ vài KB đến 1MB. Nếu gửi nguyên tệp lớn (hàng trăm MB hoặc GB) qua một message, bộ nhớ JVM Heap của broker và network buffer sẽ bị nghẽn và sập.
+2. **Khả năng chịu lỗi (Fault-Tolerance) & Truyền tải tin cậy:** Nếu truyền nguyên file qua mạng bị đứt ở 99%, toàn bộ file phải truyền lại từ đầu. Khi băm thành các chunk 64KB, hệ thống chỉ cần retry đúng chunk bị lỗi.
+3. **Khai thác xử lý phân tán song song (Multi-Partition Concurrency):** Việc chia nhỏ cho phép phân tán các chunk vào nhiều partition (P0, P1, P2) để tận dụng I/O song song.
+4. **Bản chất phát video trong bài demo:**
+   > *Lưu ý cách nói:* Trong demo này, video được truyền phát dưới dạng các thông điệp Kafka nhị phân độc lập và được gom lại, tái ghép tại phía Consumer trước khi phát (**Client-side Reassembly**). Đây không phải là video streaming dạng progressive phát ngay từ byte đầu tiên, mà là minh hoạ cho kiến trúc chia nhỏ và tái cấu trúc dữ liệu nhị phân qua Kafka.
 
 ---
 
-### 4. HOW & WHEN (Cách hoạt động và Hoàn cảnh sử dụng)
-> 🔹 **HOW: Cơ chế 1 Nguồn phát nhưng Nhiều Nguồn thu (Pub/Sub Broadcast):**  
-> - *"Trong Queue truyền thống (RabbitMQ), tin nhắn khi được đọc sẽ bị xóa khỏi hàng đợi.*  
-> - *Trong Kafka, tin nhắn được ghi nối tiếp vào các **Partition Log** và lưu trữ cố định. Mỗi bên thu đăng ký một **Consumer Group** riêng biệt và tự quản lý con trỏ **Offset** của mình.*  
-> - *Nhờ vậy, Kafka tự động **Broadcast (Fan-out)** 1 nguồn phát video tới cả 3 nguồn thu: 1 nguồn phát video, 1 nguồn dịch phụ đề AI, và 1 nguồn ghi CSDL mà không bên nào cản trở bên nào!"*
->
-> 🔹 **WHEN (Khi nào dùng & Khi nào không dùng):**  
-> - *NÊN DÙNG:* Khi cần xử lý lưu lượng lớn liên tục (video chunks, IoT, clickstream), kiến trúc microservices bất đồng bộ, hệ thống cần tính phát lại (Replayability).  
-> - *KHÔNG NÊN DÙNG:* Ứng dụng CRUD đơn giản, lưu lượng thấp, hoặc các tương tác đòi hỏi đồng bộ tức thời (Synchronous RPC).
+### 3. Vị trí của Kafka trong hệ sinh thái ứng dụng
+> **Thầy thường hỏi:** *"Kafka nằm ở đâu? Giữa Frontend - Backend hay giữa Backend - CSDL?"*
+
+- **Không bao giờ đặt Kafka trực tiếp giữa Frontend (Trình duyệt) và Backend:**
+  - Trình duyệt chạy trên môi trường người dùng không tin cậy. Mở cổng 9092 của Kafka ra public Internet sẽ đối mặt nguy cơ tấn công DDoS, spam partition làm nghẽn broker.
+  - Trình duyệt chỉ giao tiếp qua HTTP/WebSocket, không hỗ trợ giao thức TCP binary thô của Kafka.
+  - **Mô hình đúng:** Frontend gửi request/dữ liệu tới Backend API Gateway (Node.js/Java/Go), sau đó Backend sử dụng Kafka Producer API để đẩy vào Broker.
+- **Kafka nằm giữa các dịch vụ Backend (Event Streaming Backbone):**
+  - Kafka đóng vai trò là xương sống kết nối bất đồng bộ giữa các Microservices độc lập.
+  - **Mô hình mở rộng trong thực tế (Future Architecture):**
+    ```
+    Producer (Upload Service)
+               │
+               ▼
+      [ Kafka Cluster ] (Topic: lecture-stream)
+        ├── Consumer Group 1: Video Reassembly & HLS Transcoder Service
+        ├── Consumer Group 2: AI Speech-to-Text Service (Whisper)
+        └── Consumer Group 3: Archive & S3/Cold-Storage Ingestion Service
+    ```
+  - **Trong bài demo seminar hiện tại:** Nhóm tập trung chứng minh chính xác các cơ chế nội tại của Kafka thông qua 3 Consumer Groups thực tế:
+    1. **`cg-video-streamer`**: Thu thập các chunk nhị phân, ghép lại tệp MP4 hoàn chỉnh và phát video.
+    2. **`cg-msg-inspector`**: Soi cấu trúc nội tại của Kafka message (Partition, Offset, Key, Checksum CRC32, Byte range).
+    3. **`cg-reassembly-tracker`**: Giám sát bản đồ phân bố chunk trên các Partition và tiến độ reassembly.
 
 ---
 
-## 🖥️ PHẦN 2: KỊCH BẢN THỰC HÀNH DEMO TRỰC TIẾP TRÊN LỚP
+### 4. Cơ chế Fan-out và Phân bố Partition (Topology chuẩn)
+- **Topic:** `stanford-lecture-stream` được chia thành **3 Partitions** (`P0`, `P1`, `P2`).
+- **Fan-out:** Cả 3 Consumer Groups đều subscribe cùng topic `stanford-lecture-stream`. Cả 3 đều nhận đủ 100% các chunk được publish.
+- **Partition Assignment:** Việc gán partition diễn ra **bên trong từng Consumer Group**. Vì mỗi group ở demo này có 1 consumer worker, worker đó đọc đồng thời cả 3 partition P0, P1, P2 của group mình với offset riêng.
+- **Key Routing:** Producer dùng `key = chunk-${chunkIndex}`. Kafka sử dụng thuật toán hash key để phân tán các chunk vào nhiều partition khác nhau (ví dụ: Chunk 0 vào P2, Chunk 1 vào P0, Chunk 2 vào P1...).
 
-1. **Khởi động:** Mở trình duyệt tại [http://localhost:3000](http://localhost:3000).
-2. **Chỉ cho Thầy thấy giao diện:**
-   - *"Thưa Thầy, giao diện của nhóm em gồm: Thanh điều khiển kích thước Chunk (32KB - 256KB), Tốc độ stream, Pipeline đồ họa Canvas thời gian thực, 3 Consumer Groups và Bảng nhật ký Partition Offsets."*
-3. **Bấm "▶ Bắt Đầu Stream (Produce)":**
-   - *"Thầy có thể thấy video bài giảng Stanford dung lượng ~770KB được Producer băm thành 13 chunks (mỗi chunk 64KB).*
-   - *Trên đồ họa Canvas, các gói tin được đẩy vào 3 Partition (P0, P1, P2) của Topic `stanford-lecture-stream`.*
-   - *Tại điểm giao thoa, Kafka thực hiện cơ chế **Fan-out Broadcast** đồng thời đến cả 3 Consumer Groups:*
-     - *Consumer 1: Nhận từng chunk nhị phân và tái ghép mảng bytes, video bài giảng bắt đầu phát mượt mà.*
-     - *Consumer 2: Nhận cùng lúc các chunk để AI Whisper-v3 hiển thị phụ đề bài giảng Stanford theo thời gian thực.*
-     - *Consumer 3: Ghi nhận ngay các bản ghi vào CSDL SQL."*
-4. **Hành động đắt giá nhất để ghi điểm cao:**
-   - Bấm nút **"⏸ Tạm dừng Nhận"** tại **Consumer 2 (AI Speech-to-Text)**.
-   - Thuyết minh: *"Thầy quan sát: Nhóm AI vừa bị tạm dừng, chỉ số **Consumer Lag** của nhóm 2 lập tức tăng lên (Lag = 3, 4, 5...). TUY NHIÊN, Consumer 1 (Video Player) và Consumer 3 (SQL) vẫn tiếp tục nhận và chạy mượt mà không hề bị ảnh hưởng! Đây chính là minh chứng sống động cho tính **Decoupling** và độc lập Offset của Kafka!"*
-   - Bấm nút **"▶ Tiếp tục Nhận"** tại Consumer 2.
-   - Thuyết minh: *"Khi nhóm AI hoạt động trở lại, Kafka kích hoạt cơ chế **Catch-up / Offset Replay**, nhóm 2 đọc bù toàn bộ các offset bị lỡ và Lag quay trở về 0!"*
-5. **Chuyển sang Tab "Kafka Nằm Ở Đâu?":**
-   - Chỉ vào sơ đồ kiến trúc và mẫu code Node.js đã chuẩn bị sẵn để giải đáp trọn vẹn cho câu hỏi của Thầy.
+---
+
+## 🖥️ PHẦN 2: KỊCH BẢN DEMO TRỰC TIẾP TRÊN LỚP
+
+### Bước 1 — Giới thiệu tổng quan hệ thống
+1. Mở song song 2 tab:
+   - Dashboard ứng dụng: [http://localhost:3000](http://localhost:3000)
+   - Kafka UI quản trị: [http://localhost:8080](http://localhost:8080)
+2. Thuyết minh:
+   > *"Hệ thống demo của nhóm em sử dụng cụm Apache Kafka KRaft thật chạy trong container Docker, kết nối qua thư viện KafkaJS chuẩn. Phía trên là bảng điều khiển stream và canvas mô phỏng pipeline. Phía dưới là 3 Consumer Groups thực tế đang subscribe vào Topic `stanford-lecture-stream`."*
+
+### Bước 2 — Bấm "▶ Bắt Đầu Stream (Produce)"
+1. Quan sát trên giao diện:
+   - Video bài giảng Stanford (~770 KB) được Producer băm thành **13 chunks** (mỗi chunk 64 KB).
+   - Mỗi chunk là một Kafka message chứa:
+     - **Value:** Mảng byte nhị phân thô (`Buffer` raw bytes).
+     - **Headers:** Metadata (`chunk-index`, `total-chunks`, `start-byte`, `end-byte`, `checksum`).
+     - **Key:** `chunk-${chunkIndex}`.
+2. Thuyết minh 3 Consumer Groups nhận dữ liệu độc lập:
+   - **Consumer 1 (`cg-video-streamer`):** Nhận từng chunk nhị phân, lưu trữ vào buffer. Khi nhận đủ 13/13 chunks, hệ thống tái ghép thành Blob MP4 và video player phát bài giảng.
+   - **Consumer 2 (`cg-msg-inspector`):** Phân tích chi tiết từng message từ Kafka: cho thấy Partition, Offset, Key, mã kiểm tra toàn vẹn CRC32 và preview hex nhị phân.
+   - **Consumer 3 (`cg-reassembly-tracker`):** Hiển thị bản đồ phân bố các chunk trên 3 Partitions (P0, P1, P2) và thanh tiến trình tái ghép.
+
+### Bước 3 — Biểu diễn kịch bản "đắt giá": Consumer Lag & Catch-up Replay
+1. Tại ô **Consumer 2 (cg-msg-inspector)**, bấm nút **"Ngắt Message Inspector (xem Lag tăng)"**.
+   - Thuyết minh: *"Mô phỏng trường hợp Service số 2 bị sự cố sập hoặc mất mạng tạm thời."*
+2. Bấm nút **"▶ Bắt Đầu Stream"** lần nữa:
+   - Thuyết minh: *"Producer tiếp tục publish đợt dữ liệu mới vào Kafka Broker. Thầy quan sát: Consumer 1 và Consumer 3 vẫn nhận và xử lý bình thường (Lag = 0). Riêng Consumer 2 không tiêu thụ tin nhắn, dẫn tới **TOTAL CONSUMER LAG** tăng vọt (Lag = 13)! Điều này chứng minh tính Decoupling và độc lập offset tuyệt đối giữa các Consumer Groups."*
+3. Bấm nút **"▶ Kết nối lại"** tại Consumer 2:
+   - Thuyết minh: *"Khi service phục hồi, Kafka kích hoạt cơ chế **Catch-up Replay**, consumer đọc bù tuần tự toàn bộ các message tồn đọng từ committed offset trước đó, và Consumer Lag nhanh chóng trở về 0!"*
+
+### Bước 4 — Chứng minh Kafka thật bằng CLI (Tránh nghi ngờ giả lập)
+Mở terminal và gõ trực tiếp lệnh vào container Docker:
+```bash
+# 1. Kiểm tra Consumer Groups và Lag thật từ broker:
+docker exec kafka-kraft-broker /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:29092 --describe --all-groups
+
+# 2. Kiểm tra Offset thật của 3 Partition:
+docker exec kafka-kraft-broker /opt/kafka/bin/kafka-get-offsets.sh --bootstrap-server localhost:29092 --topic stanford-lecture-stream
+```
+Thuyết minh: *"Các giá trị offset và lag trên Dashboard của nhóm em phản ánh chính xác 100% với số liệu trả về từ shell script nội bộ của Kafka Broker, không hề sử dụng biến đếm giả lập."*
 
 ---
 
 ## ❓ PHẦN 3: BỘ CÂU HỎI VẤN ĐÁP CỦA THẦY VÀ CÂU TRẢ LỜI "CHUẨN 10 ĐIỂM"
 
-#### Q1: "Nếu 1 video dài 2 tiếng nặng 5GB thì Kafka có lưu toàn bộ 5GB đó trong topic không?"
-> **Trả lời:**  
-> *"Dạ thưa Thầy, có thể lưu nhưng thực tế người ta sẽ cấu hình **Retention Policy** (theo thời gian, ví dụ 1 ngày, hoặc theo dung lượng, ví dụ 10GB). Các chunk sau khi được xử lý và ghi xuống Cloud Storage (như Amazon S3 hay MinIO) bởi Consumer Group 3 thì Kafka có thể tự động xóa dọn log cũ theo cấu hình `log.retention.hours` hoặc `log.cleanup.policy=delete`, giúp cụm broker luôn nhẹ nhàng và tối ưu chi phí."*
+#### Q1: "Nếu các chunk nằm rải rác trên nhiều partition, làm sao đảm bảo video không bị đảo lộn thứ tự khi ghép lại?"
+> **Trả lời tiếng Việt:**  
+> *"Dạ thưa Thầy, **Kafka đảm bảo thứ tự tuần tự trong từng partition, chứ không đảm bảo thứ tự toàn cục giữa nhiều partition**. Trong kiến trúc của nhóm em, các chunk được phân tán vào nhiều partition dựa trên key để tối ưu hóa tải. Tuy nhiên, mỗi chunk đều được đóng gói kèm trường `chunk-index` trong metadata header. Phía consumer sẽ sử dụng index này để sắp xếp và tái ghép chính xác dữ liệu gốc trước khi khởi tạo video, đảm bảo không bao giờ bị xáo trộn thứ tự."*
+>
+> *(Nếu cần trả lời tiếng Anh):*  
+> *"Kafka guarantees ordering within a partition, not globally across multiple partitions. In our demo, chunks can be distributed across multiple partitions. The chunk index in the message metadata is used to identify the original position of each chunk, so the consumer can reconstruct the original data order."*
 
-#### Q2: "Làm sao đảm bảo các chunk của video không bị đảo lộn thứ tự khi phát?"
-> **Trả lời:**  
-> *"Dạ thưa Thầy, Kafka đảm bảo **thứ tự tuần tự tuyệt đối (Strict Ordering) trong phạm vi TỪNG PARTITION**. Khi băm nhỏ, Producer sử dụng chung một `message.key = streamId`, Kafka sẽ dùng thuật toán băm khóa (Hash Key) để định tuyến toàn bộ các chunk của cùng một video vào ĐÚNG MỘT PARTITION duy nhất (ví dụ Partition 0). Nhờ vậy, offset của các chunk sẽ luôn tăng tuần tự 0, 1, 2, 3... và Consumer chắc chắn nhận đúng thứ tự mà không sợ bị xáo trộn."*
+---
 
-#### Q3: "Tại sao không dùng RabbitMQ cho bài toán này mà lại dùng Kafka?"
+#### Q2: "Nếu video dài 2 tiếng nặng 5GB thì hệ thống của em có bị tràn bộ nhớ không?"
 > **Trả lời:**  
-> *"Dạ thưa Thầy, có 3 điểm khác biệt lớn:*  
-> *1. **Thông lượng:** Kafka xử lý bằng cơ chế ghi đĩa tuần tự và Zero-copy của Kernel nên đạt hàng triệu msg/s, vượt trội hơn RabbitMQ vốn phụ thuộc nhiều vào RAM broker.*  
-> *2. **Mô hình Broadcast:** RabbitMQ dùng cơ chế xóa tin nhắn sau khi consumer đọc xong; nếu muốn broadcast tới nhiều ứng dụng phải tạo thêm nhiều exchange và queue riêng biệt, gây nhân bản dữ liệu trong RAM. Kafka dùng mô hình Log phân vùng, cùng 1 tin nhắn trên đĩa cứng có thể phục vụ vô số Consumer Groups độc lập.*  
-> *3. **Replayability:** Khi mô hình AI muốn chạy lại từ đầu dữ liệu video, Kafka chỉ cần reset offset về 0; còn RabbitMQ thì tin nhắn đã bị xóa mất."*
+> *"Dạ thưa Thầy, đối với demo seminar này, nhóm em đọc file video mẫu vào bộ nhớ RAM trước để đơn giản hóa việc minh hoạ.  
+> Tuy nhiên, trong một hệ thống Production thực tế, hệ thống sẽ sử dụng cơ chế **Streaming I/O (Read Stream)**:  
+> 1. Producer đọc file theo dạng luồng (Node.js `fs.createReadStream` với `highWaterMark = 64KB`), đọc đến đâu băm và publish chunk vào Kafka đến đó mà không bao giờ tải toàn bộ 5GB vào RAM.  
+> 2. Phía Kafka Broker được cấu hình **Retention Policy** (theo thời gian như `log.retention.hours=24` hoặc theo dung lượng `log.retention.bytes`) và Consumer sau khi tái ghép sẽ lưu file ra Object Storage (như Amazon S3/MinIO), giúp hệ thống luôn an toàn trước lỗi OOM."*
+>
+> *(Nếu cần trả lời tiếng Anh):*  
+> *"Our seminar demo loads a small sample video into memory for simplicity. In a production system, the producer should use a streaming file/network source and publish chunks incrementally instead of loading the entire file into memory."*
+
+---
+
+#### Q3: "Tại sao trong code lại đặt key là `chunk-${chunkIndex}` thay vì đặt cùng 1 key để vào 1 partition?"
+> **Trả lời:**  
+> *"Dạ thưa Thầy, việc sử dụng key khác nhau theo từng chunk là chủ ý thiết kế để minh họa khả năng **phân vùng dữ liệu (Partitioning)** của Kafka. Nếu đặt cùng 1 key, Kafka sẽ băm toàn bộ vào duy nhất một partition (ví dụ P0), hai partition P1 và P2 sẽ bị bỏ trống, làm mất đi ý nghĩa của một hệ thống phân tán. Việc chia đều vào P0, P1, P2 giúp Thầy và các bạn thấy rõ cách Kafka phân phối tải trên nhiều partition và cách consumer đọc song song từ nhiều phân vùng."*
+
+---
+
+#### Q4: "Vị trí của Kafka trong source code của nhóm em được tổ chức thế nào?"
+> **Trả lời:**  
+> *"Dạ thưa Thầy:  
+> - Cụm Kafka KRaft chạy độc lập trong Docker container (cổng nội bộ 29092, cổng host 9092).  
+> - Trong file `server/kafka-engine.js`, nhóm sử dụng client chính thống `KafkaJS` để khởi tạo `Producer`, `Admin` client và 3 `Consumer` riêng biệt.  
+> - File `server/video-chunker.js` chịu trách nhiệm đọc binary và băm thành 64KB buffer.  
+> - File `server/server.js` đóng vai trò Backend Gateway điều phối WebSocket đẩy dữ liệu trực quan lên trình duyệt."*
+
+---
+
+#### Q5: "Tại sao không dùng RabbitMQ cho bài toán này mà lại dùng Apache Kafka?"
+> **Trả lời:**  
+> *"Dạ thưa Thầy, có 3 ưu thế vượt trội của Kafka trong kịch bản này:  
+> 1. **Mô hình Fan-out tối ưu:** RabbitMQ phải nhân bản tin nhắn vào nhiều Queue khác nhau trong RAM cho từng bên nhận. Kafka chỉ lưu 1 bản ghi duy nhất trên Commit Log đĩa cứng, và cho phép vô số Consumer Groups cùng đọc với con trỏ offset riêng.  
+> 2. **Tính Replayability:** Với RabbitMQ, message bị xóa sau khi ACK. Với Kafka, khi cần tái ghép lại video hoặc khi một consumer mới tham gia hệ thống, consumer có thể reset offset về 0 (`fromBeginning: true`) để đọc lại toàn bộ lịch sử dữ liệu.  
+> 3. **Thông lượng & Zero-Copy:** Kafka sử dụng cơ chế ghi đĩa tuần tự (Sequential I/O) và Linux Page Cache kết hợp `sendfile` (Zero-copy), cho phép xử lý hàng triệu gói tin nhị phân mỗi giây với mức tiêu thụ CPU và RAM cực thấp."*

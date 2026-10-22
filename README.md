@@ -21,22 +21,24 @@ KafkaJS Producer
       |
       v
 APACHE KAFKA (KRaft)
-Topic: stanford-lecture-stream
-Partition 0 | Partition 1 | Partition 2
-      |             |             |
-      v             v             v
-Consumer 1    Consumer 2    Consumer 3
-cg-video-     cg-msg-       cg-reassembly-
-streamer      inspector     tracker
-      |             |             |
-      v             v             v
-Video Player  Inspector    Reassembly Tracker
-(tái ghép)    (soi byte)   (bản đồ chunk)
+Topic: stanford-lecture-stream (3 Partitions: P0, P1, P2)
+                   ┌──────────┬──────────┐
+                   │   P 0    │   P 1    │   P 2    │
+                   └────┬─────┴────┬─────┴────┬─────┘
+                        │          │          │
+         ┌──────────────┴──────────┼──────────┴──────────────┐
+         │ (Fan-out: Mỗi Consumer Group đọc độc lập toàn bộ Topic)  │
+         ▼                         ▼                         ▼
+   Consumer Group 1          Consumer Group 2          Consumer Group 3
+  cg-video-streamer         cg-msg-inspector       cg-reassembly-tracker
+(Đọc P0, P1, P2 độc lập)   (Đọc P0, P1, P2 độc lập)  (Đọc P0, P1, P2 độc lập)
+         │                         │                         │
+         ▼                         ▼                         ▼
+   Video Player                Inspector             Reassembly Tracker
+ (Tái ghép phát video)    (Soi Offset, Key, CRC)    (Bản đồ phân bố Chunk)
 ```
 
-> Frontend không giao tiếp trực tiếp với Kafka.
-> Frontend chỉ kết nối WebSocket đến Backend.
-> Kafka nằm hoàn toàn trong tầng xử lý dữ liệu.
+> **Lưu ý kiến trúc:** Các Consumer Group hoạt động hoàn toàn độc lập với nhau. Mỗi group tự quản lý committed offset riêng trên từng partition của Topic. Frontend không kết nối trực tiếp với Kafka mà nhận dữ liệu đẩy về qua WebSocket từ Backend.
 
 ---
 
