@@ -8,34 +8,34 @@
 ## 🏗️ Kiến Trúc Hệ Thống
 
 ```
-Frontend (Web Dashboard)
-      |
-      | HTTP / WebSocket
-      v
-Backend (Express)
-      |
-   Video Chunker (64 KB/chunk)
-      |
-      v
-KafkaJS Producer
-      |
-      v
-APACHE KAFKA (KRaft)
-Topic: stanford-lecture-stream (3 Partitions: P0, P1, P2)
-                   ┌──────────┬──────────┐
-                   │   P 0    │   P 1    │   P 2    │
-                   └────┬─────┴────┬─────┴────┬─────┘
-                        │          │          │
-         ┌──────────────┴──────────┼──────────┴──────────────┐
-         │ (Fan-out: Mỗi Consumer Group đọc độc lập toàn bộ Topic)  │
-         ▼                         ▼                         ▼
-   Consumer Group 1          Consumer Group 2          Consumer Group 3
-  cg-video-streamer         cg-msg-inspector       cg-reassembly-tracker
-(Đọc P0, P1, P2 độc lập)   (Đọc P0, P1, P2 độc lập)  (Đọc P0, P1, P2 độc lập)
-         │                         │                         │
-         ▼                         ▼                         ▼
-   Video Player                Inspector             Reassembly Tracker
- (Tái ghép phát video)    (Soi Offset, Key, CRC)    (Bản đồ phân bố Chunk)
+                          Frontend (Web Dashboard)
+                                     │
+                                     │ HTTP / WebSocket
+                                     ▼
+                             Backend (Express)
+                                     │
+                               Video Chunker (64 KB/chunk)
+                                     │
+                                     ▼
+                              KafkaJS Producer
+                                     │
+                                     ▼
+                            APACHE KAFKA (KRaft)
+                     Topic: video-stream (3 Partitions)
+                   ┌─────────────┬─────────────┬─────────────┐
+                   │ Partition 0 │ Partition 1 │ Partition 2 │
+                   └──────┬──────┴──────┬──────┴──────┬──────┘
+                          │             │             │
+        ┌─────────────────┴─────────────┼─────────────┴─────────────────┐
+        │  Fan-out: Mỗi Consumer Group đọc độc lập toàn bộ các Partition │
+        ▼                               ▼                               ▼
+  Consumer Group 1                Consumer Group 2                Consumer Group 3
+ cg-video-streamer               cg-msg-inspector              cg-reassembly-tracker
+(Đọc P0, P1, P2 độc lập)        (Đọc P0, P1, P2 độc lập)       (Đọc P0, P1, P2 độc lập)
+        │                               │                               │
+        ▼                               ▼                               ▼
+   Video Player                     Inspector                  Reassembly Tracker
+(Tái ghép phát video)         (Soi Offset, Key, CRC)         (Bản đồ phân bố Chunk)
 ```
 
 > **Lưu ý kiến trúc:** Các Consumer Group hoạt động hoàn toàn độc lập với nhau. Mỗi group tự quản lý committed offset riêng trên từng partition của Topic. Frontend không kết nối trực tiếp với Kafka mà nhận dữ liệu đẩy về qua WebSocket từ Backend.
@@ -74,7 +74,7 @@ Kết nối thành công sẽ thấy trong terminal:
  Apache Kafka Video Streaming Demo
  Server: http://localhost:3000
  Kafka: REAL Apache Kafka
- Topic: stanford-lecture-stream
+ Topic: video-stream
  Consumer Groups: 3
 ====================================================
 Connected to REAL Apache Kafka
@@ -100,7 +100,7 @@ Mỗi chunk là 1 Kafka message riêng biệt với:
 
 ### 2. Kafka phân phối vào 3 Partitions
 Quan sát Partition Log — Kafka phân phối chunks vào Partition 0, 1, 2.
-Xác nhận trên Kafka UI → Topics → stanford-lecture-stream.
+Xác nhận trên Kafka UI → Topics → video-stream.
 
 ### 3. Fan-out — 1 nguồn phát, 3 Consumer Groups nhận độc lập
 Cùng 1 chunk xuất hiện đồng thời ở cả 3 consumer groups.
@@ -128,7 +128,7 @@ docker exec kafka-kraft-broker \
 docker exec kafka-kraft-broker \
   /opt/kafka/bin/kafka-get-offsets.sh \
   --bootstrap-server localhost:29092 \
-  --topic stanford-lecture-stream
+  --topic video-stream
 
 # Xem Consumer Groups + Lag thực tế
 docker exec kafka-kraft-broker \
@@ -156,7 +156,7 @@ ApacheKafkaDemo/
 │   ├── kafka-engine.js         # KafkaJS: Producer, Consumer, Admin
 │   ├── video-chunker.js        # Băm video thành Kafka binary messages
 │   └── data/
-│       └── stanford_lecture_sample.mp4
+│       └── sample_video.mp4
 └── client/
     ├── index.html              # Dashboard UI
     ├── styles.css

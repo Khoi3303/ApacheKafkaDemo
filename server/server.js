@@ -61,7 +61,7 @@ function broadcast(type, data) {
 
 kafkaEngine.registerConsumerGroup(
   'cg-video-streamer',
-  'stanford-lecture-stream',
+  'video-stream',
   async (msg, meta) => {
     const chunk = msg.value;
 
@@ -129,7 +129,7 @@ kafkaEngine.registerConsumerGroup(
 
 kafkaEngine.registerConsumerGroup(
   'cg-msg-inspector',
-  'stanford-lecture-stream',
+  'video-stream',
   async (msg, meta) => {
     const chunk =
       msg.value;
@@ -257,7 +257,7 @@ function resetReassemblyState(
 
 kafkaEngine.registerConsumerGroup(
   'cg-reassembly-tracker',
-  'stanford-lecture-stream',
+  'video-stream',
   async (msg, meta) => {
     const chunk =
       msg.value;
@@ -770,7 +770,7 @@ server.listen(
     );
 
     console.log(
-      ' Topic: stanford-lecture-stream'
+      ' Topic: video-stream'
     );
 
     console.log(

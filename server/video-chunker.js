@@ -9,12 +9,12 @@ class VideoChunker {
     this.defaultVideoPath = path.join(
       __dirname,
       'data',
-      'stanford_lecture_sample.mp4'
+      'sample_video.mp4'
     );
 
     this.currentVideoBuffer = null;
     this.currentFilename =
-      'stanford_lecture_sample.mp4';
+      'sample_video.mp4';
 
     this.chunkSize = 64 * 1024;
     this.streamingInterval = 250;
@@ -124,7 +124,7 @@ class VideoChunker {
   }
 
   async startStream(
-    topicName = 'stanford-lecture-stream'
+    topicName = 'video-stream'
   ) {
     if (!this.currentVideoBuffer) {
       this.loadDefaultVideo();
@@ -153,7 +153,7 @@ class VideoChunker {
     this.stopStream();
 
     this.streamId =
-      `stanford-cs229-${Date.now().toString(36)}`;
+      `video-session-${Date.now().toString(36)}`;
 
     this.currentChunkIndex = 0;
 
@@ -305,7 +305,7 @@ class VideoChunker {
 
       const result =
         await kafkaEngine.produce(
-          'stanford-lecture-stream',
+          'video-stream',
           key,
           chunkBuffer,
           {

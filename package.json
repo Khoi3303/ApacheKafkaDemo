@@ -1,7 +1,7 @@
 {
   "name": "apache-kafka-video-streaming-demo",
   "version": "1.0.0",
-  "description": "Apache Kafka Event Streaming & Video Chunking Broadcast Demo - Stanford Lecture Case Study",
+  "description": "Apache Kafka Real-time Event Streaming & Video Chunking Broadcast Demo",
   "main": "server/server.js",
   "scripts": {
     "start": "node server/server.js",

@@ -23,7 +23,7 @@ document.addEventListener('DOMContentLoaded', () => {
     },
     particles: [],
     lastTelemetry: null,
-    currentFilename: 'stanford_lecture_sample.mp4',
+    currentFilename: 'sample_video.mp4',
     chunkSizeKB: 64,
     speedInterval: 250
   };
@@ -381,7 +381,7 @@ document.addEventListener('DOMContentLoaded', () => {
         <code class="inspector-code">${data.partitionKey}</code>
         <span class="inspector-arrow">→</span>
         <span class="inspector-label">TOPIC</span>
-        <code class="inspector-code">stanford-lecture-stream</code>
+        <code class="inspector-code">video-stream</code>
         <span class="inspector-arrow">→</span>
         <span class="inspector-label">PARTITION</span>
         <code class="inspector-code" style="color:${pColor}">P${data.assignedPartition} ✓ (từ Kafka Broker)</code>
@@ -512,7 +512,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Render Visual Partition Logs
   function renderPartitionTracks(kafka) {
-    const topic = kafka.topics['stanford-lecture-stream'];
+    const topic = kafka.topics['video-stream'] || (kafka.topics && Object.values(kafka.topics)[0]);
     if (!topic) return;
 
     let html = '';

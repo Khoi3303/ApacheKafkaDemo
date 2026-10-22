@@ -1,7 +1,7 @@
 const { EventEmitter } = require('events');
 const { Kafka } = require('kafkajs');
 
-const TOPIC = 'stanford-lecture-stream';
+const TOPIC = 'video-stream';
 const PARTITIONS = 3;
 
 const CONSUMER_GROUPS = [
