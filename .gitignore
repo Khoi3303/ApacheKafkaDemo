@@ -27,3 +27,6 @@ Thumbs.db
 *.njsproj
 *.sln
 *.sw?
+
+# Presentation & Private Notes
+presentation_guide.md
