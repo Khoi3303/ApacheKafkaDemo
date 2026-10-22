@@ -35,7 +35,7 @@
         │                               │                               │
         ▼                               ▼                               ▼
    Video Player                     Inspector                  Reassembly Tracker
-(Tái ghép phát video)         (Soi Offset, Key, CRC)         (Bản đồ phân bố Chunk)
+(Tái ghép phát video)         (Soi Offset, Key, MD5)         (Bản đồ phân bố Chunk)
 ```
 
 > **Lưu ý kiến trúc:** Các Consumer Group hoạt động hoàn toàn độc lập với nhau. Mỗi group tự quản lý committed offset riêng trên từng partition của Topic. Frontend không kết nối trực tiếp với Kafka mà nhận dữ liệu đẩy về qua WebSocket từ Backend.
