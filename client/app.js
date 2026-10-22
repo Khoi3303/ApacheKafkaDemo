@@ -276,7 +276,18 @@ document.addEventListener('DOMContentLoaded', () => {
 
       case 'system:reset':
         resetLocalState();
-        showToast('Đã đặt lại hệ thống Kafka và bộ đệm.', 'info');
+        showToast('Đã reset toàn bộ Kafka Topic, Offsets và Consumer Groups.', 'info');
+        break;
+
+      // Real Kafka consumer pause/resume events
+      case 'consumer:paused':
+        state.consumersPaused[msg.data.groupId] = true;
+        updateSystemStatusUI();
+        break;
+
+      case 'consumer:resumed':
+        state.consumersPaused[msg.data.groupId] = false;
+        updateSystemStatusUI();
         break;
     }
   }
@@ -351,7 +362,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
-  // Consumer 2: Kafka Message Inspector — real partition routing + hex bytes
+  // Consumer 2: Kafka Message Inspector — real partition from Apache Kafka broker
   function handleMsgInspector(data) {
     const pColors = ['#0ea5e9', '#a855f7', '#10b981'];
     const pColor = pColors[data.assignedPartition] || '#94a3b8';
@@ -369,23 +380,23 @@ document.addEventListener('DOMContentLoaded', () => {
         <span class="inspector-label">KEY</span>
         <code class="inspector-code">${data.partitionKey}</code>
         <span class="inspector-arrow">→</span>
-        <span class="inspector-label">HASH</span>
-        <code class="inspector-code">${data.keyHashHex}</code>
+        <span class="inspector-label">TOPIC</span>
+        <code class="inspector-code">stanford-lecture-stream</code>
         <span class="inspector-arrow">→</span>
-        <span class="inspector-label">MOD 3</span>
-        <code class="inspector-code" style="color:${pColor}">${data.keyHashMod}</code>
+        <span class="inspector-label">PARTITION</span>
+        <code class="inspector-code" style="color:${pColor}">P${data.assignedPartition} ✓ (từ Kafka Broker)</code>
       </div>
       <div class="inspector-bytes">
         <span class="inspector-label">BYTES</span>
-        <code class="inspector-code">[${data.startByte.toLocaleString()} → ${data.endByte.toLocaleString()}]</code>
+        <code class="inspector-code">[${(data.startByte || 0).toLocaleString()} → ${(data.endByte || 0).toLocaleString()}]</code>
         <span class="inspector-label" style="margin-left:8px">SIZE</span>
-        <code class="inspector-code">${(data.chunkSize / 1024).toFixed(1)} KB</code>
+        <code class="inspector-code">${((data.chunkSize || 0) / 1024).toFixed(1)} KB</code>
         <span class="inspector-label" style="margin-left:8px">MD5</span>
-        <code class="inspector-code">${data.checksum}</code>
+        <code class="inspector-code">${data.checksum || '-'}</code>
       </div>
       <div class="inspector-hex">
-        <span class="inspector-label">HEX</span>
-        <code class="inspector-hex-data">${data.hexPreview}</code>
+        <span class="inspector-label">HEX PREVIEW (12 bytes đầu)</span>
+        <code class="inspector-hex-data">${data.hexPreview || ''}</code>
       </div>
     `;
     msgInspectorTerminal.prepend(entry);
@@ -553,9 +564,10 @@ document.addEventListener('DOMContentLoaded', () => {
   // ANIMATED TOPOLOGY PIPELINE CANVAS
   // ----------------------------------------------------
   function spawnCanvasParticle(data) {
+    // data from real Kafka: { topic, partition, offset, key, size, timestamp }
     state.particles.push({
       id: Math.random(),
-      chunkIndex: data.chunkIndex || 0,
+      chunkIndex: data.offset || 0,
       partition: data.partition || 0,
       progress: 0,
       speed: 0.015,

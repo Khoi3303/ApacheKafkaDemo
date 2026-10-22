@@ -1,111 +1,29 @@
-/**
- * Kafka Broker & Pub/Sub Streaming Engine
- * 
- * Supports both:
- * 1. High-fidelity in-memory Kafka Broker simulation (zero-dependency, instant, educational)
- *    - Partitions, append-only logs, sequential offsets
- *    - Multiple independent Consumer Groups (true Broadcast / Fan-out)
- *    - Consumer Lag tracking, Commit Offsets, Partition Rebalance
- * 2. Optional Native KafkaJS bridge to real Apache Kafka broker (localhost:9092)
- */
-
 const { EventEmitter } = require('events');
-const { Kafka, Partitioners } = require('kafkajs');
+const { Kafka } = require('kafkajs');
 
-class KafkaMessage {
-  constructor(partition, offset, key, value, headers = {}) {
-    this.partition = partition;
-    this.offset = offset;
-    this.key = key;
-    this.value = value;
-    this.headers = headers;
-    this.timestamp = Date.now();
-  }
-}
+const TOPIC = 'stanford-lecture-stream';
+const PARTITIONS = 3;
 
-class KafkaTopic {
-  constructor(name, numPartitions = 3) {
-    this.name = name;
-    this.numPartitions = numPartitions;
-    // Each partition is an append-only array of KafkaMessage
-    this.partitions = Array.from({ length: numPartitions }, () => []);
-  }
-
-  append(partitionIndex, key, value, headers) {
-    if (partitionIndex < 0 || partitionIndex >= this.numPartitions) {
-      partitionIndex = 0;
-    }
-    const partition = this.partitions[partitionIndex];
-    const offset = partition.length;
-    const msg = new KafkaMessage(partitionIndex, offset, key, value, headers);
-    partition.push(msg);
-    return msg;
-  }
-
-  getLatestOffset(partitionIndex) {
-    return this.partitions[partitionIndex] ? this.partitions[partitionIndex].length : 0;
-  }
-
-  getTotalMessages() {
-    return this.partitions.reduce((acc, p) => acc + p.length, 0);
-  }
-
-  clear() {
-    this.partitions = Array.from({ length: this.numPartitions }, () => []);
-  }
-}
-
-class ConsumerGroup {
-  constructor(groupId, topicName, numPartitions, onMessage) {
-    this.groupId = groupId;
-    this.topicName = topicName;
-    this.numPartitions = numPartitions;
-    this.onMessage = onMessage; // callback(message, groupMetadata)
-    this.isPaused = false;
-
-    // Committed offsets per partition
-    this.committedOffsets = Array(numPartitions).fill(0);
-    // Current read cursor per partition
-    this.currentOffsets = Array(numPartitions).fill(0);
-    this.messagesProcessed = 0;
-    this.bytesProcessed = 0;
-  }
-
-  resetOffset(offset = 0) {
-    this.committedOffsets = Array(this.numPartitions).fill(offset);
-    this.currentOffsets = Array(this.numPartitions).fill(offset);
-  }
-
-  pause() {
-    this.isPaused = true;
-  }
-
-  resume() {
-    this.isPaused = false;
-  }
-
-  calculateLag(topic) {
-    const lagPerPartition = [];
-    let totalLag = 0;
-
-    for (let p = 0; p < this.numPartitions; p++) {
-      const latestOffset = topic.getLatestOffset(p);
-      const lag = Math.max(0, latestOffset - this.committedOffsets[p]);
-      lagPerPartition.push(lag);
-      totalLag += lag;
-    }
-
-    return { totalLag, lagPerPartition };
-  }
-}
+const CONSUMER_GROUPS = [
+  'cg-video-streamer',
+  'cg-msg-inspector',
+  'cg-reassembly-tracker'
+];
 
 class KafkaEngine extends EventEmitter {
   constructor() {
     super();
-    this.topics = new Map();
+
+    this.kafka = null;
+    this.admin = null;
+    this.producer = null;
+
+    this.ready = null;
+    this.topicReady = false;
+    this.mode = 'connecting';
+
     this.consumerGroups = new Map();
-    this.mode = 'embedded'; // 'embedded' or 'real-kafka'
-    this.realKafka = null;
+
     this.stats = {
       totalProduced: 0,
       totalBytesProduced: 0,
@@ -114,300 +32,562 @@ class KafkaEngine extends EventEmitter {
       startTime: Date.now()
     };
 
-    // Rate tracker
     this.recentBytes = [];
-    setInterval(() => this.calculateThroughput(), 1000);
+    this.snapshot = this.createEmptySnapshot();
 
-    // Default Topic for Stanford Lecture Streaming
-    this.createTopic('stanford-lecture-stream', 3);
+    this.ready = this.init();
 
-    // Real Kafka Bridge (auto-detected on localhost:9092)
-    this.isRealKafkaConnected = false;
-    this.realProducer = null;
-    this.initRealKafkaBridge();
+    setInterval(() => {
+      this.refreshSnapshot().catch(() => { });
+    }, 1000);
   }
 
-  async initRealKafkaBridge() {
-    try {
-      this.kafkaClient = new Kafka({
-        clientId: 'kafka-demo-bridge',
-        brokers: ['localhost:9092'],
-        retry: { retries: 2, initialRetryTime: 300 }
-      });
-      const admin = this.kafkaClient.admin();
-      await admin.connect();
-      const existingTopics = await admin.listTopics();
-      if (!existingTopics.includes('stanford-lecture-stream')) {
-        await admin.createTopics({
-          topics: [{
-            topic: 'stanford-lecture-stream',
-            numPartitions: 3,
-            replicationFactor: 1
-          }]
-        });
-        console.log('✅ Created topic "stanford-lecture-stream" with 3 partitions on real Kafka cluster.');
+  createEmptySnapshot() {
+    return {
+      mode: this.mode,
+      stats: this.stats,
+      topics: {
+        [TOPIC]: {
+          name: TOPIC,
+          numPartitions: PARTITIONS,
+          totalMessages: 0,
+          partitions: Array.from(
+            { length: PARTITIONS },
+            (_, partitionId) => ({
+              partitionId,
+              messageCount: 0,
+              latestOffset: -1,
+              recentMessages: []
+            })
+          )
+        }
+      },
+      consumers: {}
+    };
+  }
+
+  async init() {
+    const brokers = (
+      process.env.KAFKA_BROKERS || 'localhost:9092'
+    ).split(',').map(x => x.trim());
+
+    this.kafka = new Kafka({
+      clientId: 'apache-kafka-video-demo',
+      brokers,
+      retry: {
+        retries: 30,
+        initialRetryTime: 500,
+        maxRetryTime: 3000
       }
-      await admin.disconnect();
-
-      this.realProducer = this.kafkaClient.producer({
-        createPartitioner: Partitioners.LegacyPartitioner
-      });
-      await this.realProducer.connect();
-      this.isRealKafkaConnected = true;
-      this.mode = 'hybrid-real-kafka';
-      console.log('✅ Real Apache Kafka connected on localhost:9092. Synced with Kafka UI on :8080');
-    } catch (err) {
-      this.isRealKafkaConnected = false;
-      this.mode = 'embedded';
-      console.log('ℹ️ Real Kafka not available at localhost:9092. Using high-fidelity In-Memory engine.');
-    }
-  }
-
-  createTopic(name, numPartitions = 3) {
-    if (!this.topics.has(name)) {
-      const topic = new KafkaTopic(name, numPartitions);
-      this.topics.set(name, topic);
-      this.emit('topic:created', { name, numPartitions });
-    }
-    return this.topics.get(name);
-  }
-
-  getTopic(name) {
-    return this.topics.get(name);
-  }
-
-  /**
-   * PRODUCER API: send(topic, key, value, headers, partitionStrategy)
-   * 
-   * Simulates Kafka Producer partition assignment:
-   * - Key hash (deterministic partition for same key)
-   * - Round-robin
-   */
-  produce(topicName, key, value, headers = {}, specifiedPartition = null) {
-    const topic = this.getTopic(topicName) || this.createTopic(topicName, 3);
-
-    let partitionIndex;
-    if (specifiedPartition !== null && specifiedPartition >= 0 && specifiedPartition < topic.numPartitions) {
-      partitionIndex = specifiedPartition;
-    } else if (key) {
-      // Simple string hash
-      let hash = 0;
-      for (let i = 0; i < key.length; i++) {
-        hash = (hash << 5) - hash + key.charCodeAt(i);
-        hash |= 0;
-      }
-      partitionIndex = Math.abs(hash) % topic.numPartitions;
-    } else {
-      // Round robin
-      partitionIndex = topic.getTotalMessages() % topic.numPartitions;
-    }
-
-    // Append to Kafka commit log
-    const msg = topic.append(partitionIndex, key, value, headers);
-    
-    // Stats update
-    const payloadSize = JSON.stringify(value).length;
-    this.stats.totalProduced++;
-    this.stats.totalBytesProduced += payloadSize;
-    this.recentBytes.push({ time: Date.now(), bytes: payloadSize });
-
-    // Emit event to system
-    this.emit('message:produced', {
-      topic: topicName,
-      partition: partitionIndex,
-      offset: msg.offset,
-      key,
-      size: payloadSize,
-      timestamp: msg.timestamp
     });
 
-    // FAN-OUT / BROADCAST to all Consumer Groups subscribed to this topic
-    this.dispatchToConsumers(topicName, msg);
+    this.admin = this.kafka.admin();
 
-    // Asynchronously bridge message to real Apache Kafka broker (for Kafka UI on :8080)
-    if (this.isRealKafkaConnected && this.realProducer) {
-      this.realProducer.send({
-        topic: topicName,
-        messages: [{
-          key: String(key || ''),
-          value: JSON.stringify(value),
-          partition: partitionIndex
-        }]
-      }).catch(err => {
-        // Non-blocking error handling
+    console.log('Connecting to Apache Kafka:', brokers.join(', '));
+
+    await this.admin.connect();
+
+    await this.ensureTopic();
+
+    this.producer = this.kafka.producer({
+      allowAutoTopicCreation: false
+    });
+
+    await this.producer.connect();
+
+    this.topicReady = true;
+    this.mode = 'real-apache-kafka';
+
+    console.log('==============================================');
+    console.log('Connected to REAL Apache Kafka');
+    console.log(`Topic: ${TOPIC}`);
+    console.log(`Partitions: ${PARTITIONS}`);
+    console.log('==============================================');
+
+    for (const group of this.consumerGroups.values()) {
+      this.startConsumer(group).catch(err => {
+        console.error(
+          `Consumer ${group.groupId} failed:`,
+          err.message
+        );
       });
     }
 
-    return msg;
+    await this.refreshSnapshot();
   }
 
-  /**
-   * FAN-OUT BROADCAST DISPATCH:
-   * Each Consumer Group receives the message independently!
-   * This directly addresses the teacher's requirement: 1 Producer -> Multiple Consumers
-   */
-  dispatchToConsumers(topicName, msg) {
-    for (const [groupId, group] of this.consumerGroups.entries()) {
-      if (group.topicName === topicName) {
-        if (group.isPaused) {
-          // If group is paused, it will lag behind!
-          this.emit('consumer:lagged', { groupId, partition: msg.partition, offset: msg.offset });
-          continue;
-        }
+  async ensureTopic() {
+    const topics = await this.admin.listTopics();
 
-        // Simulating consumer commit offset
-        group.committedOffsets[msg.partition] = msg.offset + 1;
-        group.currentOffsets[msg.partition] = msg.offset + 1;
-        group.messagesProcessed++;
-        const payloadSize = JSON.stringify(msg.value).length;
-        group.bytesProcessed += payloadSize;
+    if (!topics.includes(TOPIC)) {
+      await this.admin.createTopics({
+        waitForLeaders: true,
+        topics: [
+          {
+            topic: TOPIC,
+            numPartitions: PARTITIONS,
+            replicationFactor: 1
+          }
+        ]
+      });
 
-        // Trigger consumer handler
-        try {
-          group.onMessage(msg, {
-            groupId,
-            partition: msg.partition,
-            offset: msg.offset,
-            committedOffset: group.committedOffsets[msg.partition]
-          });
-        } catch (err) {
-          console.error(`Error in consumer group ${groupId}:`, err);
-        }
-      }
+      console.log(
+        `Created Kafka topic "${TOPIC}" with ${PARTITIONS} partitions`
+      );
     }
   }
 
-  /**
-   * CONSUMER API: registerConsumerGroup(groupId, topicName, onMessage)
-   */
+  async waitUntilReady() {
+    await this.ready;
+  }
+
+  async produce(topic, key, value, headers = {}) {
+    await this.waitUntilReady();
+
+    let payload;
+
+    if (Buffer.isBuffer(value)) {
+      payload = value;
+    } else if (value && Buffer.isBuffer(value.data)) {
+      payload = value.data;
+    } else {
+      payload = Buffer.from(JSON.stringify(value));
+    }
+
+    const kafkaHeaders = {};
+
+    for (const [headerKey, headerValue] of Object.entries(headers)) {
+      kafkaHeaders[headerKey] = Buffer.from(String(headerValue));
+    }
+
+    const result = await this.producer.send({
+      topic,
+      messages: [
+        {
+          key: key ? String(key) : null,
+          value: payload,
+          headers: kafkaHeaders
+        }
+      ]
+    });
+
+    const record = result[0];
+
+    const produced = {
+      topic,
+      partition: record.partition,
+      offset: Number(record.offset),
+      key,
+      size: payload.length,
+      timestamp: Date.now()
+    };
+
+    this.stats.totalProduced++;
+    this.stats.totalBytesProduced += payload.length;
+
+    this.recentBytes.push({
+      time: Date.now(),
+      bytes: payload.length
+    });
+
+    this.emit('message:produced', produced);
+
+    return produced;
+  }
+
+  decodeMessage(message) {
+    const headers = message.headers || {};
+
+    const header = name => {
+      if (!headers[name]) {
+        return undefined;
+      }
+
+      return headers[name].toString();
+    };
+
+    const contentType =
+      header('content-type') || 'application/octet-stream';
+
+    if (contentType.startsWith('video/')) {
+      return {
+        streamId: header('stream-id'),
+        chunkIndex: Number(header('chunk-index')),
+        totalChunks: Number(header('total-chunks')),
+        startByte: Number(header('start-byte')),
+        endByte: Number(header('end-byte')),
+        chunkSize: Number(header('chunk-size')),
+        totalBytes: Number(header('total-bytes')),
+        mimeType: contentType,
+        checksum: header('checksum'),
+        sourceFilename: header('source-filename'),
+        base64Data: message.value.toString('base64')
+      };
+    }
+
+    try {
+      return JSON.parse(message.value.toString());
+    } catch {
+      return {
+        rawBase64: message.value.toString('base64')
+      };
+    }
+  }
+
   registerConsumerGroup(groupId, topicName, onMessage) {
-    const topic = this.getTopic(topicName) || this.createTopic(topicName, 3);
-    const group = new ConsumerGroup(groupId, topicName, topic.numPartitions, onMessage);
+    const group = {
+      groupId,
+      topicName,
+      onMessage,
+      consumer: null,
+      isPaused: false,
+      messagesProcessed: 0,
+      bytesProcessed: 0,
+      started: false
+    };
+
     this.consumerGroups.set(groupId, group);
-    this.emit('consumer:registered', { groupId, topicName });
+
+    this.emit('consumer:registered', {
+      groupId,
+      topicName
+    });
+
+    if (this.topicReady) {
+      this.startConsumer(group).catch(err => {
+        console.error(
+          `Consumer ${groupId} failed:`,
+          err.message
+        );
+      });
+    }
+
     return group;
   }
 
-  pauseConsumerGroup(groupId) {
-    const group = this.consumerGroups.get(groupId);
-    if (group) group.pause();
-  }
-
-  resumeConsumerGroup(groupId) {
-    const group = this.consumerGroups.get(groupId);
-    if (group) {
-      group.resume();
-      // Catch up on missed messages (Consumer Replay / Catch-up)
-      this.catchUpConsumerGroup(group);
+  async startConsumer(group) {
+    if (group.started) {
+      return;
     }
-  }
 
-  catchUpConsumerGroup(group) {
-    const topic = this.getTopic(group.topicName);
-    if (!topic) return;
+    group.started = true;
 
-    for (let p = 0; p < topic.numPartitions; p++) {
-      const partitionMsgs = topic.partitions[p];
-      const startOffset = group.committedOffsets[p];
-      for (let o = startOffset; o < partitionMsgs.length; o++) {
-        const msg = partitionMsgs[o];
-        group.committedOffsets[p] = msg.offset + 1;
-        group.currentOffsets[p] = msg.offset + 1;
-        group.messagesProcessed++;
-        group.onMessage(msg, {
-          groupId: group.groupId,
-          partition: p,
-          offset: msg.offset,
-          isCatchUp: true
-        });
+    const consumer = this.kafka.consumer({
+      groupId: group.groupId,
+      allowAutoTopicCreation: false,
+      sessionTimeout: 30000,
+      heartbeatInterval: 3000
+    });
+
+    group.consumer = consumer;
+
+    await consumer.connect();
+
+    await consumer.subscribe({
+      topic: group.topicName,
+      fromBeginning: true
+    });
+
+    console.log(
+      `Consumer connected: ${group.groupId}`
+    );
+
+    consumer.run({
+      autoCommit: false,
+
+      eachMessage: async ({
+        topic,
+        partition,
+        message,
+        heartbeat
+      }) => {
+        try {
+          const value = this.decodeMessage(message);
+
+          const metadata = {
+            groupId: group.groupId,
+            topic,
+            partition,
+            offset: Number(message.offset),
+            committedOffset: Number(message.offset) + 1,
+            timestamp: message.timestamp,
+            isCatchUp: false
+          };
+
+          await group.onMessage(
+            {
+              key: message.key
+                ? message.key.toString()
+                : null,
+              value,
+              rawValue: message.value
+            },
+            metadata
+          );
+
+          await consumer.commitOffsets([
+            {
+              topic,
+              partition,
+              offset: String(
+                Number(message.offset) + 1
+              )
+            }
+          ]);
+
+          group.messagesProcessed++;
+          group.bytesProcessed += message.value.length;
+
+          await heartbeat();
+        } catch (err) {
+          console.error(
+            `Error processing message in ${group.groupId}:`,
+            err
+          );
+
+          throw err;
+        }
       }
+    }).catch(err => {
+      console.error(
+        `Kafka consumer stopped for ${group.groupId}:`,
+        err
+      );
+
+      group.started = false;
+    });
+  }
+
+  async pauseConsumerGroup(groupId) {
+    const group = this.consumerGroups.get(groupId);
+
+    if (!group || !group.consumer) {
+      return false;
     }
+
+    group.consumer.pause([
+      {
+        topic: group.topicName
+      }
+    ]);
+
+    group.isPaused = true;
+
+    this.emit('consumer:paused', {
+      groupId
+    });
+
+    await this.refreshSnapshot();
+
+    return true;
+  }
+
+  async resumeConsumerGroup(groupId) {
+    const group = this.consumerGroups.get(groupId);
+
+    if (!group || !group.consumer) {
+      return false;
+    }
+
+    group.consumer.resume([
+      {
+        topic: group.topicName
+      }
+    ]);
+
+    group.isPaused = false;
+
+    this.emit('consumer:resumed', {
+      groupId
+    });
+
+    await this.refreshSnapshot();
+
+    return true;
   }
 
   async resetAll() {
-    for (const topic of this.topics.values()) {
-      topic.clear();
-    }
+    await this.waitUntilReady();
+
     for (const group of this.consumerGroups.values()) {
-      group.resetOffset(0);
+      if (group.consumer) {
+        try {
+          await group.consumer.stop();
+        } catch { }
+
+        try {
+          await group.consumer.disconnect();
+        } catch { }
+      }
+
+      group.consumer = null;
+      group.started = false;
+      group.isPaused = false;
       group.messagesProcessed = 0;
       group.bytesProcessed = 0;
     }
-    this.stats.totalProduced = 0;
-    this.stats.totalBytesProduced = 0;
+
+    try {
+      await this.admin.deleteGroups(CONSUMER_GROUPS);
+    } catch { }
+
+    try {
+      await this.admin.deleteTopics({
+        topics: [TOPIC]
+      });
+    } catch { }
+
+    await new Promise(resolve =>
+      setTimeout(resolve, 1000)
+    );
+
+    await this.admin.createTopics({
+      waitForLeaders: true,
+      topics: [
+        {
+          topic: TOPIC,
+          numPartitions: PARTITIONS,
+          replicationFactor: 1
+        }
+      ]
+    });
+
+    this.stats = {
+      totalProduced: 0,
+      totalBytesProduced: 0,
+      produceRateBps: 0,
+      messagesPerSec: 0,
+      startTime: Date.now()
+    };
+
+    this.recentBytes = [];
+
+    for (const group of this.consumerGroups.values()) {
+      await this.startConsumer(group);
+    }
+
     this.emit('system:reset');
 
-    // Also purge topic on real Kafka cluster so Kafka UI (8080) resets completely
-    if (this.isRealKafkaConnected && this.kafkaClient) {
-      try {
-        const admin = this.kafkaClient.admin();
-        await admin.connect();
-        await admin.deleteTopics({ topics: ['stanford-lecture-stream'] });
-        await new Promise(r => setTimeout(r, 400));
-        await admin.createTopics({
-          topics: [{ topic: 'stanford-lecture-stream', numPartitions: 3, replicationFactor: 1 }]
-        });
-        await admin.disconnect();
-        console.log('✅ Real Kafka topic "stanford-lecture-stream" purged and recreated clean.');
-      } catch (err) {
-        // Non-blocking
-      }
-    }
+    await this.refreshSnapshot();
   }
 
   calculateThroughput() {
     const now = Date.now();
-    this.recentBytes = this.recentBytes.filter(item => now - item.time < 3000);
-    const sumBytes = this.recentBytes.reduce((acc, item) => acc + item.bytes, 0);
-    this.stats.produceRateBps = Math.round(sumBytes / 3);
-    this.stats.messagesPerSec = Math.round(this.recentBytes.length / 3);
+
+    this.recentBytes = this.recentBytes.filter(
+      item => now - item.time < 3000
+    );
+
+    const totalBytes = this.recentBytes.reduce(
+      (sum, item) => sum + item.bytes,
+      0
+    );
+
+    this.stats.produceRateBps = Math.round(
+      totalBytes / 3
+    );
+
+    this.stats.messagesPerSec = Math.round(
+      this.recentBytes.length / 3
+    );
+  }
+
+  async refreshSnapshot() {
+    if (!this.admin || !this.topicReady) {
+      return;
+    }
+
+    this.calculateThroughput();
+
+    const topicOffsets =
+      await this.admin.fetchTopicOffsets(TOPIC);
+
+    const partitions = topicOffsets.map(partition => ({
+      partitionId: Number(partition.partition),
+      messageCount: Number(partition.offset),
+      latestOffset:
+        Number(partition.offset) > 0
+          ? Number(partition.offset) - 1
+          : -1,
+      recentMessages: []
+    }));
+
+    const consumers = {};
+
+    for (const group of this.consumerGroups.values()) {
+      let committed = [];
+
+      try {
+        const result =
+          await this.admin.fetchOffsets({
+            groupId: group.groupId,
+            topics: [TOPIC]
+          });
+
+        committed =
+          result[0]?.partitions || [];
+      } catch { }
+
+      const committedMap = Object.fromEntries(
+        committed.map(item => [
+          Number(item.partition),
+          Number(item.offset)
+        ])
+      );
+
+      const committedOffsets =
+        partitions.map(
+          partition =>
+            committedMap[partition.partitionId] ?? 0
+        );
+
+      const lagPerPartition =
+        partitions.map(partition =>
+          Math.max(
+            0,
+            partition.messageCount -
+            (committedMap[partition.partitionId] ?? 0)
+          )
+        );
+
+      const lag = lagPerPartition.reduce(
+        (sum, value) => sum + value,
+        0
+      );
+
+      consumers[group.groupId] = {
+        groupId: group.groupId,
+        topicName: TOPIC,
+        isPaused: group.isPaused,
+        committedOffsets,
+        messagesProcessed: group.messagesProcessed,
+        bytesProcessed: group.bytesProcessed,
+        lag,
+        lagPerPartition
+      };
+    }
+
+    this.snapshot = {
+      mode: this.mode,
+      stats: this.stats,
+      topics: {
+        [TOPIC]: {
+          name: TOPIC,
+          numPartitions: PARTITIONS,
+          totalMessages: partitions.reduce(
+            (sum, partition) =>
+              sum + partition.messageCount,
+            0
+          ),
+          partitions
+        }
+      },
+      consumers
+    };
   }
 
   getSnapshot() {
-    const topicsData = {};
-    for (const [name, topic] of this.topics.entries()) {
-      topicsData[name] = {
-        name,
-        numPartitions: topic.numPartitions,
-        totalMessages: topic.getTotalMessages(),
-        partitions: topic.partitions.map((p, idx) => ({
-          partitionId: idx,
-          messageCount: p.length,
-          latestOffset: p.length > 0 ? p[p.length - 1].offset : -1,
-          recentMessages: p.slice(-5).map(m => ({
-            offset: m.offset,
-            key: m.key,
-            timestamp: m.timestamp,
-            size: JSON.stringify(m.value).length,
-            chunkIndex: m.value.chunkIndex,
-            totalChunks: m.value.totalChunks
-          }))
-        }))
-      };
-    }
-
-    const consumersData = {};
-    for (const [id, group] of this.consumerGroups.entries()) {
-      const topic = this.getTopic(group.topicName);
-      const lagInfo = topic ? group.calculateLag(topic) : { totalLag: 0, lagPerPartition: [] };
-      consumersData[id] = {
-        groupId: id,
-        topicName: group.topicName,
-        isPaused: group.isPaused,
-        committedOffsets: group.committedOffsets,
-        messagesProcessed: group.messagesProcessed,
-        bytesProcessed: group.bytesProcessed,
-        lag: lagInfo.totalLag,
-        lagPerPartition: lagInfo.lagPerPartition
-      };
-    }
-
-    return {
-      mode: this.mode,
-      stats: this.stats,
-      topics: topicsData,
-      consumers: consumersData
-    };
+    return this.snapshot;
   }
 }
 

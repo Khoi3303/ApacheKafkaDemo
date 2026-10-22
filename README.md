@@ -1,113 +1,174 @@
-# ⚡ Apache Kafka Video Streaming & Pub/Sub Broadcast Demo
-> **Dự án mô phỏng Event Streaming, Video Chunking và Kiến trúc 1 Nguồn phát - Nhiều Nguồn thu với Apache Kafka**
+# ⚡ Apache Kafka — Video Streaming & Pub/Sub Broadcast Demo
+
+> Minh hoạ **Event Streaming thời gian thực** với **Apache Kafka KRaft** (không cần ZooKeeper):
+> 1 Producer băm nhỏ video → Kafka Broker (3 Partitions) → Fan-out đồng thời đến 3 Consumer Groups độc lập.
 
 ---
 
-## 📌 1. Giới Thiệu Đề Tài
-Dự án giải quyết bài toán cốt lõi trong xử lý dữ liệu lớn (Big Data / Media Streaming):
-- **Event Streaming:** Truyền dữ liệu liên tục theo thời gian thực thay vì truyền cả file tĩnh dung lượng lớn qua mạng.
-- **Data Chunking (Băm nhỏ dữ liệu):** Video bài giảng được chia nhỏ thành các gói (chunks 32KB - 256KB) kèm metadata, checksum và timestamp.
-- **Publish-Subscribe (Pub/Sub) Broadcast Architecture:** 1 Producer duy nhất phát dòng sự kiện vào Topic Kafka, sau đó Kafka **tự động broadcast (fan-out)** đồng thời đến **3 Consumer Groups độc lập**:
-  1. 🎬 **Consumer Group 1 (`cg-video-streamer`):** Tái ghép các mảng byte nhị phân để phát video liên tục ngay trên trình duyệt (Progressive Video Playback).
-  2. 🔬 **Consumer Group 2 (`cg-msg-inspector`):** Soi chi tiết dữ liệu kỹ thuật từng Kafka Message (Partition Key, Hash, Offset, Byte range, Checksum, Hex Preview).
-  3. 🧩 **Consumer Group 3 (`cg-reassembly-tracker`):** Giám sát quá trình gom và tái ghép các chunk phân tán từ 3 Partitions theo thời gian thực.
+## 🏗️ Kiến Trúc Hệ Thống
+
+```
+Frontend (Web Dashboard)
+      |
+      | HTTP / WebSocket
+      v
+Backend (Express)
+      |
+   Video Chunker (64 KB/chunk)
+      |
+      v
+KafkaJS Producer
+      |
+      v
+APACHE KAFKA (KRaft)
+Topic: stanford-lecture-stream
+Partition 0 | Partition 1 | Partition 2
+      |             |             |
+      v             v             v
+Consumer 1    Consumer 2    Consumer 3
+cg-video-     cg-msg-       cg-reassembly-
+streamer      inspector     tracker
+      |             |             |
+      v             v             v
+Video Player  Inspector    Reassembly Tracker
+(tái ghép)    (soi byte)   (bản đồ chunk)
+```
+
+> Frontend không giao tiếp trực tiếp với Kafka.
+> Frontend chỉ kết nối WebSocket đến Backend.
+> Kafka nằm hoàn toàn trong tầng xử lý dữ liệu.
 
 ---
 
-## 💡 2. Vì Sao Phải Băm Nhỏ Dữ Liệu (Video Chunking)?
+## 🚀 Chạy Demo (3 bước)
 
-| Vấn đề | Truyền cả file dung lượng lớn (HTTP/SQL BLOB) | Băm nhỏ thành Chunks qua Kafka |
-| :--- | :--- | :--- |
-| **Độ trễ (Latency)** | Người nghe phải đợi tải xong toàn bộ file mới bắt đầu xem được. | Người nghe xem được ngay lập tức ở giây đầu tiên khi Chunk 0 vừa đến. |
-| **Bộ nhớ (Memory)** | Gây tràn bộ nhớ (Out-Of-Memory Heap) tại cả Server, Broker và Client. | Tiêu thụ bộ nhớ cực thấp, truyền theo luồng (Stream buffer). |
-| **Độ chịu lỗi (Fault Tolerance)** | Nếu mạng bị rớt khi đang tải 99%, toàn bộ file bị hủy và phải tải lại từ đầu. | Nếu rớt mạng ở chunk nào, Kafka chỉ cần phát lại (retry) đúng chunk đó. |
-| **Xử lý song song** | Không thể xử lý song song khi file chưa truyền xong. | Các Consumer có thể vừa xử lý dữ liệu của Chunk 1 trong khi Producer đang truyền Chunk 5. |
+### Yêu cầu
+- Docker Desktop đang chạy
+- Node.js 18+
 
----
+### Bước 1 — Khởi động Apache Kafka
 
-## 👥 3. Cơ Chế 1 Nguồn Phát - Nhiều Nguồn Thu (Pub/Sub Fan-Out)
-- Trong Queue truyền thống (RabbitMQ standard queue), 1 tin nhắn khi được tiêu thụ sẽ bị xóa khỏi hàng đợi.
-- Trong **Apache Kafka**:
-  - Dữ liệu được lưu trữ trên đĩa cứng dưới dạng **Append-only Commit Log** theo thời gian cấu hình (Retention time).
-  - Mỗi bên thu đăng ký một **Consumer Group** riêng biệt.
-  - Mỗi Consumer Group lưu trữ một con trỏ **Offset** độc lập trên từng Partition.
-  - Khi Producer gửi 1 chunk, **Kafka tự động phát tán (Broadcast) chunk đó tới TẤT CẢ các Consumer Groups**.
-  - Nếu một Consumer xử lý chậm hoặc bị ngắt kết nối, **Consumer Lag** của nhóm đó tăng lên, nhưng **KHÔNG hề làm chậm hay nghẽn các Consumer còn lại**!
+```bash
+docker compose up -d
+```
 
----
+Kafka KRaft broker khởi động tại localhost:9092.
+Kafka UI tại http://localhost:8080.
 
-## 🚀 4. Hướng Dẫn Cài Đặt & Chạy Demo
+Lần đầu chạy cần tải image (~2 phút).
+Kafka sẵn sàng khi healthcheck pass (xanh trong Docker Desktop).
 
-### Cách 1: Chạy Siêu Tốc (Embedded Mode)
-Không cần cài đặt Docker hay Zookeeper phức tạp, dự án đã tích hợp sẵn **High-Fidelity Kafka Engine** tương thích chuẩn:
+### Bước 2 — Chạy ứng dụng
 
-1. **Cài đặt thư viện:**
-   ```bash
-   npm install
-   ```
+```bash
+npm install
+npm start
+```
 
-2. **Khởi chạy Demo Server:**
-   ```bash
-   npm start
-   ```
+Kết nối thành công sẽ thấy trong terminal:
 
-3. **Mở trình duyệt:**
-   Truy cập: [http://localhost:3000](http://localhost:3000)
+```
+====================================================
+ Apache Kafka Video Streaming Demo
+ Server: http://localhost:3000
+ Kafka: REAL Apache Kafka
+ Topic: stanford-lecture-stream
+ Consumer Groups: 3
+====================================================
+Connected to REAL Apache Kafka
+Consumer connected: cg-video-streamer
+Consumer connected: cg-msg-inspector
+Consumer connected: cg-reassembly-tracker
+```
 
-4. **Kịch bản thao tác trên giao diện:**
-   - Bấm **"Bắt Đầu Stream"**: Quan sát đồ họa luồng dữ liệu (Canvas) phát tán các chunks vào Kafka Partitions và 3 Consumer Groups.
-   - Quan sát Video bài giảng phát trực tiếp, Message Inspector soi từng byte nhị phân, và Reassembly Tracker hiển thị bản đồ ghép chunk.
-   - Bấm **"Ngắt Consumer"**: Quan sát **Consumer Lag** tăng lên trong khi các Consumer khác vẫn chạy mượt mà.
-   - Bấm **"Tiếp Tục Nhận"**: Quan sát Kafka **Catch-up / Offset Replay** đọc bù toàn bộ dữ liệu bị trễ!
+### Bước 3 — Mở 2 cửa sổ demo
 
----
-
-### Cách 2: Chạy với Apache Kafka Thật (KRaft Mode - Docker)
-Dành cho các bạn muốn trải nghiệm cụm Kafka phân tán thực tế:
-
-1. **Khởi chạy cụm Kafka KRaft (không cần ZooKeeper):**
-   ```bash
-   docker compose up -d
-   ```
-
-2. **Kiểm tra Kafka UI:**
-   Mở trình duyệt: [http://localhost:8080](http://localhost:8080) để xem Topic `stanford-lecture-stream`, các Partitions và Consumer Groups thực tế.
-
-3. **Chạy ứng dụng Bridge:**
-   ```bash
-   npm start
-   ```
+- Demo App: http://localhost:3000
+- Kafka UI:  http://localhost:8080
 
 ---
 
-## 📂 5. Cấu Trúc Mã Nguồn
+## 🎬 Kịch Bản Demo
+
+### 1. Băm nhỏ video vào Kafka
+Bấm "Bắt Đầu Stream" → Producer chia video thành các chunks 64 KB.
+Mỗi chunk là 1 Kafka message riêng biệt với:
+- Binary video data (raw bytes) làm Kafka value
+- Metadata làm Kafka headers: chunk-index, total-chunks, start-byte, end-byte, checksum
+
+### 2. Kafka phân phối vào 3 Partitions
+Quan sát Partition Log — Kafka phân phối chunks vào Partition 0, 1, 2.
+Xác nhận trên Kafka UI → Topics → stanford-lecture-stream.
+
+### 3. Fan-out — 1 nguồn phát, 3 Consumer Groups nhận độc lập
+Cùng 1 chunk xuất hiện đồng thời ở cả 3 consumer groups.
+Mỗi group xử lý theo cách riêng, offset hoàn toàn độc lập.
+
+### 4. Demo Consumer Lag
+1. Bấm "Ngắt Inspector" (Consumer 2)
+2. Bấm "Bắt Đầu Stream" lần nữa
+3. Quan sát TOTAL CONSUMER LAG tăng — Consumer 1 và 3 vẫn chạy bình thường
+4. Bấm "Kết nối lại" → Kafka Catch-up Replay từ committed offset
+
+---
+
+## 🔍 Chứng Minh Kafka Thật (CLI)
+
+Chạy trực tiếp vào Docker container để xác nhận dữ liệu thật từ Kafka broker:
+
+```bash
+# Xem topic tồn tại trong broker
+docker exec kafka-kraft-broker \
+  /opt/kafka/bin/kafka-topics.sh \
+  --bootstrap-server localhost:29092 --list
+
+# Xem offsets thực tế (tăng sau mỗi lần stream)
+docker exec kafka-kraft-broker \
+  /opt/kafka/bin/kafka-get-offsets.sh \
+  --bootstrap-server localhost:29092 \
+  --topic stanford-lecture-stream
+
+# Xem Consumer Groups + Lag thực tế
+docker exec kafka-kraft-broker \
+  /opt/kafka/bin/kafka-consumer-groups.sh \
+  --bootstrap-server localhost:29092 \
+  --describe --all-groups
+```
+
+Tip: Chạy kafka-get-offsets.sh trước khi stream (offset = 0),
+sau đó stream xong chạy lại — offset tăng đúng bằng số chunks.
+Đây là bằng chứng không thể làm giả bằng UI.
+
+---
+
+## 📂 Cấu Trúc Mã Nguồn
 
 ```
 ApacheKafkaDemo/
-├── README.md                      # Hướng dẫn chi tiết kỹ thuật
-├── docker-compose.yml             # Cấu hình cụm Kafka KRaft thực tế
-├── package.json                   # Thư viện phụ thuộc (express, ws, kafkajs)
+├── README.md
+├── docker-compose.yml          # Apache Kafka KRaft + Kafka UI
+├── Dockerfile                  # Đóng gói Node.js app
+├── package.json
 ├── server/
-│   ├── server.js                  # Express + WebSocket + Kafka Consumer Dispatcher
-│   ├── kafka-engine.js            # Lõi Kafka Broker: Partitions, Offsets, Consumer Groups, Lag
-│   ├── video-chunker.js           # Bộ băm nhỏ video bài giảng thành các sự kiện Kafka
+│   ├── server.js               # Express + WebSocket + 3 Consumer Groups
+│   ├── kafka-engine.js         # KafkaJS: Producer, Consumer, Admin
+│   ├── video-chunker.js        # Băm video thành Kafka binary messages
 │   └── data/
-│       └── stanford_lecture_sample.mp4  # Video bài giảng mẫu chuẩn
-├── client/
-│   ├── index.html                 # Giao diện Dashboard tương tác trực quan
-│   ├── styles.css                 # Hệ thống giao diện hiện đại, responsive
-│   └── app.js                     # Điều khiển Canvas, WebSocket, Video Player, Inspector
-└── scripts/
-    ├── download_sample.js         # Script tải video mẫu
-    ├── test_demo.js               # Script kiểm thử tự động toàn diện
-    └── reset.js                   # Script reset hệ thống
+│       └── stanford_lecture_sample.mp4
+└── client/
+    ├── index.html              # Dashboard UI
+    ├── styles.css
+    └── app.js                  # WebSocket client, Canvas, Video Player
 ```
 
 ---
 
-## 📊 6. Tính Năng Kỹ Thuật Nổi Bật
-- [x] Mô phỏng trực quan cơ chế băm nhỏ dữ liệu và truyền phát streaming thời gian thực.
-- [x] Minh chứng rõ ràng kiến trúc 1 nguồn phát - nhiều nguồn thu (Pub/Sub Fan-out).
-- [x] Mô phỏng và đo lường Consumer Lag, Offset Commit, Catch-up Replay.
-- [x] Hỗ trợ kết nối đồng thời In-Memory Engine và Apache Kafka KRaft thật qua Docker.
-- [x] Giao diện Dashboard tương tác trực quan, responsive tự động co giãn.
+## 📊 Tính Năng
+
+- Apache Kafka thật — KRaft mode, không ZooKeeper, chạy trong Docker
+- Binary video chunking — Raw bytes làm Kafka value, metadata làm headers
+- 3 Consumer Groups độc lập — Mỗi group có offset riêng, fan-out thật
+- Consumer Lag thật — Đọc từ admin.fetchOffsets() của Kafka broker
+- Catch-up Replay — Consumer kết nối lại đọc bù từ committed offset
+- Kafka UI tích hợp — Xem topic, partition, consumer group trực tiếp
+- CLI verification — Xác minh bằng Kafka shell scripts trong Docker
