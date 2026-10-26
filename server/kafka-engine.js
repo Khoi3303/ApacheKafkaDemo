@@ -1,5 +1,5 @@
 const { EventEmitter } = require('events');
-const { Kafka } = require('kafkajs');
+const { Kafka, Partitioners } = require('kafkajs');
 
 const TOPIC = 'video-stream';
 const PARTITIONS = 3;
@@ -90,7 +90,8 @@ class KafkaEngine extends EventEmitter {
     await this.ensureTopic();
 
     this.producer = this.kafka.producer({
-      allowAutoTopicCreation: false
+      allowAutoTopicCreation: false,
+      createPartitioner: Partitioners.DefaultPartitioner
     });
 
     await this.producer.connect();
@@ -176,7 +177,7 @@ class KafkaEngine extends EventEmitter {
     const produced = {
       topic,
       partition: record.partition,
-      offset: Number(record.offset),
+      offset: Number(record.baseOffset ?? record.offset ?? 0),
       key,
       size: payload.length,
       timestamp: Date.now()
@@ -243,7 +244,8 @@ class KafkaEngine extends EventEmitter {
       isPaused: false,
       messagesProcessed: 0,
       bytesProcessed: 0,
-      started: false
+      started: false,
+      lastOffsetPerPartition: { 0: -1, 1: -1, 2: -1 }
     };
 
     this.consumerGroups.set(groupId, group);
@@ -302,6 +304,23 @@ class KafkaEngine extends EventEmitter {
         heartbeat
       }) => {
         try {
+          if (group.isPaused) {
+            try {
+              group.consumer.pause([{ topic, partitions: [partition] }]);
+            } catch {}
+
+            while (group.isPaused && group.started) {
+              await heartbeat();
+              await new Promise(resolve => setTimeout(resolve, 200));
+            }
+
+            if (!group.started) return;
+
+            try {
+              group.consumer.resume([{ topic, partitions: [partition] }]);
+            } catch {}
+          }
+
           const value = this.decodeMessage(message);
 
           const metadata = {
@@ -335,6 +354,7 @@ class KafkaEngine extends EventEmitter {
             }
           ]);
 
+          group.lastOffsetPerPartition[partition] = Number(message.offset);
           group.messagesProcessed++;
           group.bytesProcessed += message.value.length;
 
@@ -425,6 +445,7 @@ class KafkaEngine extends EventEmitter {
       group.isPaused = false;
       group.messagesProcessed = 0;
       group.bytesProcessed = 0;
+      group.lastOffsetPerPartition = { 0: -1, 1: -1, 2: -1 };
     }
 
     try {
@@ -461,6 +482,7 @@ class KafkaEngine extends EventEmitter {
     };
 
     this.recentBytes = [];
+    this.snapshot = this.createEmptySnapshot();
 
     for (const group of this.consumerGroups.values()) {
       await this.startConsumer(group);
@@ -537,18 +559,31 @@ class KafkaEngine extends EventEmitter {
 
       const committedOffsets =
         partitions.map(
-          partition =>
-            committedMap[partition.partitionId] ?? 0
+          partition => {
+            const lastOff = group.lastOffsetPerPartition ? group.lastOffsetPerPartition[partition.partitionId] : -1;
+            if (lastOff !== undefined && lastOff >= 0) {
+              return lastOff + 1;
+            }
+            const val = committedMap[partition.partitionId];
+            return (val === undefined || val < 0) ? 0 : val;
+          }
         );
 
       const lagPerPartition =
-        partitions.map(partition =>
-          Math.max(
-            0,
-            partition.messageCount -
-            (committedMap[partition.partitionId] ?? 0)
-          )
-        );
+        partitions.map(partition => {
+          if (partition.messageCount === 0) {
+            return 0;
+          }
+          const lastOff = group.lastOffsetPerPartition ? group.lastOffsetPerPartition[partition.partitionId] : -1;
+          let currentProgress = 0;
+          if (lastOff !== undefined && lastOff >= 0) {
+            currentProgress = lastOff + 1;
+          } else {
+            const committed = committedMap[partition.partitionId];
+            currentProgress = (committed === undefined || committed < 0) ? 0 : committed;
+          }
+          return Math.max(0, partition.messageCount - currentProgress);
+        });
 
       const lag = lagPerPartition.reduce(
         (sum, value) => sum + value,

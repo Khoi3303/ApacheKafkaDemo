@@ -850,17 +850,66 @@ body.theme-light .stream-source-info {
   position: absolute;
   bottom: -6px;
   display: flex;
-  gap: 2px;
+  gap: 3px;
+  min-height: 8px;
+  align-items: center;
 }
 
 .cursor-dot {
-  width: 6px;
-  height: 6px;
+  width: 8px;
+  height: 8px;
   border-radius: 50%;
+  border: 1.5px solid #ffffff;
+  transition: all 0.25s ease;
+  display: inline-block;
+  flex-shrink: 0;
 }
 .cursor-dot.c1 { background: var(--accent-cyan); box-shadow: 0 0 6px var(--accent-cyan); }
 .cursor-dot.c2 { background: var(--accent-purple); box-shadow: 0 0 6px var(--accent-purple); }
 .cursor-dot.c3 { background: var(--accent-emerald); box-shadow: 0 0 6px var(--accent-emerald); }
+
+.cursor-dot.paused {
+  border-color: #ef4444;
+  box-shadow: 0 0 8px #ef4444;
+  animation: pulse-cursor-paused 1.2s infinite;
+}
+
+@keyframes pulse-cursor-paused {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.35; transform: scale(0.8); }
+}
+
+.lagging-behind-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: rgba(239, 68, 68, 0.08);
+  border: 1px dashed rgba(239, 68, 68, 0.4);
+  color: #dc2626;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  font-weight: 700;
+  margin-right: 8px;
+  flex-shrink: 0;
+}
+
+.partition-legend-strip {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-top: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.partition-legend-strip .legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
 
 /* ARCHITECTURE TAB ("Kafka nằm ở đâu?") */
 .architecture-container {

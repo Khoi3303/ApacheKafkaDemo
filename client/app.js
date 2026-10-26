@@ -510,13 +510,50 @@ document.addEventListener('DOMContentLoaded', () => {
     renderPartitionTracks(kafka);
   }
 
-  // Render Visual Partition Logs
+  // Render Visual Partition Logs with REAL Dynamic Consumer Offsets
   function renderPartitionTracks(kafka) {
     const topic = kafka.topics['video-stream'] || (kafka.topics && Object.values(kafka.topics)[0]);
     if (!topic) return;
 
+    const consumerDefs = [
+      { id: 'cg-video-streamer', key: 'c1', label: '🔵 CG-1 (Video Player)' },
+      { id: 'cg-msg-inspector', key: 'c2', label: '🟣 CG-2 (Inspector)' },
+      { id: 'cg-reassembly-tracker', key: 'c3', label: '🟢 CG-3 (Reassembly Tracker)' }
+    ];
+
     let html = '';
     topic.partitions.forEach(p => {
+      // Calculate consumer offset positions for this partition
+      const consumerPositions = consumerDefs.map(def => {
+        const cData = kafka.consumers ? kafka.consumers[def.id] : null;
+        const isPaused = !!(state.consumersPaused[def.id] || (cData && cData.isPaused));
+        const lag = (cData && cData.lagPerPartition && cData.lagPerPartition[p.partitionId] !== undefined)
+          ? cData.lagPerPartition[p.partitionId]
+          : 0;
+
+        let pos = -1;
+        if (p.messageCount > 0) {
+          if (lag === 0) {
+            pos = p.latestOffset;
+          } else {
+            pos = p.latestOffset - lag;
+          }
+        }
+
+        return {
+          ...def,
+          isPaused,
+          lag,
+          pos
+        };
+      });
+
+      const startOffset = Math.max(0, p.latestOffset - 7);
+      const endOffset = p.latestOffset;
+
+      // Check if any consumer lag causes its cursor to fall behind visible window
+      const laggingBehind = consumerPositions.filter(c => c.pos >= 0 && c.pos < startOffset);
+
       html += `
         <div class="partition-row">
           <div class="partition-label">
@@ -525,8 +562,14 @@ document.addEventListener('DOMContentLoaded', () => {
           <div class="partition-log-slots">
       `;
 
-      const startOffset = Math.max(0, p.latestOffset - 7);
-      const endOffset = p.latestOffset;
+      if (laggingBehind.length > 0) {
+        html += `
+          <div class="lagging-behind-pill" title="Consumer đang bị tụt lại phía trước khoảng hiển thị">
+            ${laggingBehind.map(c => `<span class="cursor-dot ${c.key} ${c.isPaused ? 'paused' : ''}"></span><span>#${c.pos} (Lag: ${c.lag})</span>`).join('')}
+            <span>◀</span>
+          </div>
+        `;
+      }
 
       if (p.messageCount === 0) {
         html += `<div style="font-size: 11px; color: var(--text-muted); padding: 12px;">(Chưa có message)</div>`;
@@ -534,14 +577,20 @@ document.addEventListener('DOMContentLoaded', () => {
         for (let off = startOffset; off <= endOffset; off++) {
           const isLatest = off === endOffset;
           const slotKB = state.chunkSizeKB || 64;
+
+          // Only render cursor dots for consumers actually positioned at this offset
+          const matchedConsumers = consumerPositions.filter(c => c.pos === off);
+          const dotsHtml = matchedConsumers.map(c => `
+            <span class="cursor-dot ${c.key} ${c.isPaused ? 'paused' : ''}" 
+                  title="${c.label}: #${c.pos}${c.isPaused ? ' [🔴 ĐÃ TẠM DỪNG / NGẮT]' : ''}${c.lag > 0 ? ` (Chậm ${c.lag} message)` : ' (Đồng bộ mới nhất)'}"></span>
+          `).join('');
+
           html += `
             <div class="offset-slot ${isLatest ? 'active' : ''}">
               <div class="offset-slot-num">#${off}</div>
               <div class="offset-slot-tag">${slotKB}KB</div>
               <div class="consumer-cursors">
-                <span class="cursor-dot c1" title="CG-1: Video Player"></span>
-                <span class="cursor-dot c2" title="CG-2: Inspector"></span>
-                <span class="cursor-dot c3" title="CG-3: Reassembly"></span>
+                ${dotsHtml}
               </div>
             </div>
           `;
@@ -884,18 +933,32 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   btnReset.addEventListener('click', async () => {
-    if (confirm('Đặt lại toàn bộ Kafka Broker, Partitions, Offsets và Cơ sở dữ liệu?')) {
-      await fetch('/api/system/reset', { method: 'POST' });
+    if (confirm('Đặt lại toàn bộ Kafka Broker, Partitions, Offsets và Giao diện?')) {
+      resetLocalState();
+      showToast('Đang đặt lại hệ thống Kafka Broker và xóa sạch dữ liệu...', 'info');
+      try {
+        await fetch('/api/system/reset', { method: 'POST' });
+      } catch (e) {
+        showToast('Lỗi khi reset: ' + e.message, 'error');
+      }
     }
   });
 
   function resetLocalState() {
     state.videoChunks = [];
     state.currentChunkIndex = 0;
+    state.totalExpectedChunks = 0;
     state.currentStreamId = null;
     state.lastReassemblyData = null;
     state.isStreaming = false;
     state.isPaused = false;
+    state.particles = [];
+    state.consumersPaused = {
+      'cg-video-streamer': false,
+      'cg-msg-inspector': false,
+      'cg-reassembly-tracker': false
+    };
+
     if (state.videoBlobUrl) {
       URL.revokeObjectURL(state.videoBlobUrl);
       state.videoBlobUrl = null;
@@ -908,9 +971,32 @@ document.addEventListener('DOMContentLoaded', () => {
     playerProgressFill.style.width = '0%';
     const overlay = document.querySelector('.video-status-overlay');
     if (overlay) overlay.style.opacity = '1';
+
+    // Reset Metrics on Page 3000
+    if (valTotalMsgs) valTotalMsgs.textContent = '0';
+    if (valChunksProgress) valChunksProgress.textContent = '0 / 13 chunks (0%)';
+    if (valThroughput) valThroughput.textContent = '0.0 KB/s';
+    if (valMsgsSec) valMsgsSec.textContent = '0 msgs/sec';
+    if (valTotalLag) valTotalLag.textContent = '0';
+    if (valLagStatus) {
+      valLagStatus.textContent = 'Đồng bộ hoàn hảo';
+      valLagStatus.style.color = 'var(--accent-emerald)';
+    }
+
+    // Reset Consumer Group cards
+    if (c1Processed) c1Processed.textContent = '0';
+    if (c1Lag) { c1Lag.textContent = 'Lag: 0'; c1Lag.className = 'lag-indicator zero'; }
+    if (c2Processed) c2Processed.textContent = '0';
+    if (c2Lag) { c2Lag.textContent = 'Lag: 0'; c2Lag.className = 'lag-indicator zero'; }
+    if (c3Processed) c3Processed.textContent = '0';
+    if (c3Lag) { c3Lag.textContent = 'Lag: 0'; c3Lag.className = 'lag-indicator zero'; }
+
+    // Reset Terminals & Maps
     if (msgInspectorTerminal) msgInspectorTerminal.innerHTML = '';
     if (reassemblyTerminal) reassemblyTerminal.innerHTML = '';
     if (reassemblyMapEl) reassemblyMapEl.innerHTML = '<div style="text-align:center;color:var(--text-muted);padding:20px;font-size:13px">Chờ stream bắt đầu...</div>';
+    if (partitionTrackContainer) partitionTrackContainer.innerHTML = '';
+
     updateSystemStatusUI();
   }
 

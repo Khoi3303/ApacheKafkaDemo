@@ -634,6 +634,14 @@ app.post(
         {}
       );
 
+      broadcast(
+        'telemetry:snapshot',
+        {
+          kafka: kafkaEngine.getSnapshot(),
+          chunker: videoChunker.getStatus()
+        }
+      );
+
       res.json({
         success: true
       });

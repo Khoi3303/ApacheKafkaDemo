@@ -4,8 +4,8 @@
   "description": "Apache Kafka Real-time Event Streaming & Video Chunking Broadcast Demo",
   "main": "server/server.js",
   "scripts": {
-    "start": "node server/server.js",
-    "dev": "node server/server.js"
+    "start": "node --disable-warning=TimeoutNegativeWarning server/server.js",
+    "dev": "node --disable-warning=TimeoutNegativeWarning server/server.js"
   },
   "keywords": [
     "kafka",
