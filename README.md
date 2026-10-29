@@ -120,21 +120,13 @@ Chạy trực tiếp vào Docker container để xác nhận dữ liệu thật 
 
 ```bash
 # Xem topic tồn tại trong broker
-docker exec kafka-kraft-broker \
-  /opt/kafka/bin/kafka-topics.sh \
-  --bootstrap-server localhost:29092 --list
+docker exec kafka-kraft-broker /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:29092 --list
 
 # Xem offsets thực tế (tăng sau mỗi lần stream)
-docker exec kafka-kraft-broker \
-  /opt/kafka/bin/kafka-get-offsets.sh \
-  --bootstrap-server localhost:29092 \
-  --topic video-stream
+docker exec kafka-kraft-broker /opt/kafka/bin/kafka-get-offsets.sh --bootstrap-server localhost:29092 --topic video-stream
 
 # Xem Consumer Groups + Lag thực tế
-docker exec kafka-kraft-broker \
-  /opt/kafka/bin/kafka-consumer-groups.sh \
-  --bootstrap-server localhost:29092 \
-  --describe --all-groups
+docker exec kafka-kraft-broker /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:29092 --describe --all-groups
 ```
 
 Tip: Chạy kafka-get-offsets.sh trước khi stream (offset = 0),

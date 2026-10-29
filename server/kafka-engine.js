@@ -89,9 +89,30 @@ class KafkaEngine extends EventEmitter {
 
     await this.ensureTopic();
 
+    // Thuật toán Round-Robin: phân phối xoay vòng tuần tự qua các Partition
+    const RoundRobinPartitioner = () => {
+      let counter = 0;
+      return ({ partitionMetadata, message }) => {
+        const numPartitions = (partitionMetadata && partitionMetadata.length) ? partitionMetadata.length : PARTITIONS;
+        if (numPartitions === 0) return 0;
+
+        // Nếu message có key dạng chunk-{index}, lấy index % numPartitions để đảm bảo thứ tự xoay vòng chuẩn xác
+        if (message.key) {
+          const match = String(message.key).match(/^chunk-(\d+)$/);
+          if (match) {
+            return parseInt(match[1], 10) % numPartitions;
+          }
+        }
+
+        const selected = counter % numPartitions;
+        counter = (counter + 1) % 1000000;
+        return selected;
+      };
+    };
+
     this.producer = this.kafka.producer({
       allowAutoTopicCreation: false,
-      createPartitioner: Partitioners.DefaultPartitioner
+      createPartitioner: RoundRobinPartitioner
     });
 
     await this.producer.connect();
